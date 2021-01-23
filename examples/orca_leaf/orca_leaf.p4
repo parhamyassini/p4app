@@ -48,7 +48,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
             hdr.orca_status.leaf_status_bit: exact;
         }
         size = 1;
-        default_action = set_default_port();
+        default_action = set_default_port;
     }
     apply {
         if (hdr.orca_label.src_label.isValid()) {
