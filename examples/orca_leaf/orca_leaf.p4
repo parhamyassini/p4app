@@ -19,7 +19,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action forward_downstream() {
         // US ports are 0, DS ports on low order bits of out_portmap 
-        meta.portmap_metadata.out_portmap = (bit <NUM_SW_PORTS>)hdr.orca_label.src_label.leaf_us | meta.portmap_metadata.out_portmap;
+        meta.portmap_metadata.out_portmap = (bit <NUM_SW_PORTS>)hdr.orca_label.src_label.leaf_ds | meta.portmap_metadata.out_portmap;
         //bit_or(meta.out_portmap, meta.out_portmap, hdr.src_label.leaf_ds); //P4_14
         //output_port_select(meta.portmap_metadata.out_portmap); Extern function call
     }
