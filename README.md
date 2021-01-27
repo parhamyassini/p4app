@@ -1,214 +1,516 @@
+p4app
+=====
 
+p4app is a tool that can build, run, debug, and test P4 programs. The
+philosophy behind p4app is "easy things should be easy" - p4app is designed to
+make small, simple P4 programs easy to write and easy to share with others.
 
-# Orca P4 Docs
-> For p4app documentations refer to https://github.com/p4lang/p4app.
+Installation
+------------
 
-At the current stage, we think implementation of Orca logic on both spine and leaf (and core) would be straightforward. The current version of P4 codes contains a sketch solution (compilable) for both switches. 
+1. Install [docker](https://docs.docker.com/engine/installation/) if you don't
+   already have it.
 
-The problem is that multicast functionality in P4 heavily relies on tables that are only manageable by the control plane.
+2. If you want, put the `p4app` script somewhere in your path. For example:
 
-Main challenges for realizing Orca (or any source-routed multicast) on programmable switches would be:
-1. Exposing output port bitmaps to the processing pipelines
-2. Allowing packet replication engine to replicate based on the bitmaps.
-3. Hardware-specific considerations for the efficiency of processing (E.g Orca Spine per-link operations).
+    ```
+    cp p4app /usr/local/bin
+    ```
 
-**Contents**
-- [Details of current codes](#details-of-current-codes)
-  * [Headers](#headers)
-  * [Leaf Switch](#leaf-switch)
-    + [Parsing headers](#parsing-headers)
-    + [Processing packets](#processing-packets)
-    + [Control plane](#control-plane)
-  * [Spine switch](#spine-switch)
-    + [Register arrays](#register-arrays)
-    + [Processing packets](#processing-packets-1)
-- [Limitations and considerations](#limitations-and-considerations)
-  * [Previous works and possible workarounds](#previous-works-and-possible-workarounds)
-    + [Elmo using Mellanox ASIC](#elmo-using-mellanox-asic)
-    + [Using "clone" primitive (recirculation)](#using-clone-primitive-recirculation)
-    + [Broadcast to egress pipeline](#broadcast-to-egress-pipeline)
-  * [Hardware-Specific Considerations](#hardware-specific-considerations)
-- [Implementing portmap extern function in software target](#implementing-portmap-extern-function-in-software-target)
-  * [Examples of defining an extern function](#examples-of-defining-an-extern-function)
-  * [What needs to be modified?](#what-needs-to-be-modified?)
-    + [targets/simple_switch/simple_switch.cpp](#targetssimple_switchsimple_switchcpp)
-    + [src/bm_sim/simple_pre.cpp:](#srcbm_simsimple_precpp)
+That's it! You're done.
 
-## Details of current codes
-### Headers
-Current version assumes two headers: (1) Ethernet and (2) Orca headers. 
-> Conventional headers can be added as well, here we only show how Orca packet processing works.
+Usage
+-----
 
-Ethernet headers:
-* dstAddr: is used as session address.
+p4app runs p4app packages. p4app packages are just directories with a `.p4app`
+extension - for example, if you wrote a router in P4, you might place it in
+`router.p4app`. Inside the directory, you'd place your P4 program, any
+supporting files, and a `p4app.json` file that tells p4app how to run it.
 
-Orca header stack:
-* orca_status_label_t: Contains 1 bit leaf status + 7 bit packet type.
-* src_label_t: contains labels that were attached by multicast source.
-* leaf_label_t contains labels attached by agent inside each rack (only processed by leaf switch).
- 
+This repository comes with an example p4app called `simple_router.p4app`. Here's
+how you can run it:
 
-### Leaf Switch
-The preliminary implementation of the leaf switch is available  in ``p4app/examples/orca_leaf``.
-
-#### Parsing headers
-When a packet arrives at the leaf switch it contains either *src_label_t* or *leaf_label_t* headers.  We define a header union orca_label_t which indicates one of these headers is valid for any packet arriving.
-
-The parser will extract the *orca_status_label* and based on the *leaf_status_bit* it decides that the packet should contain *src_label* or *leaf_label* and extract the correct header.
-
-####  Processing packets
-After completion of parser stage, the switch will make decisions based on the headers:
- ```
-If packet contains *src_label*
-	 If it is coming from a spine link:
-			Match on the leaf_status_bit and forwards the packet
-			to the active agent port (given by control plane).
-
-	If it is coming from a server link:
-		 Forward the packet on upstream links 
-		 (given by leaf_us label).
-
-Else if packet contains *leaf_label*:
-	Forward packet on downstream links (given by leaf_label).
+```
+p4app run examples/simple_router.p4app
 ```
 
+If you run this command, you'll find yourself at a Mininet command prompt. p4app
+will automatically download a Docker image containing the P4 compiler and tools,
+compile `simpler_router.p4`, and set up a container with a simulated network you
+can use to experiment. In addition to Mininet itself, you can use `tshark`,
+`scapy`, and the net-tools and nmap suites right out of the box.
 
-#### Control plane 
-> Only control plane functionality for  packet forwarding was implemented. Additional commands will be needed for exchanging health check packets between data plane and control plane.
+Mininet isn't the only backend that p4app supports, though. Here's another
+example p4app:
 
-Example control plane commands are written in `p4app/examples/orca_leaf/orca_leaf.config`.
-
-In general the format for specifying commands is:
-```table_add <table_name> <action_name> <match_value> => <action_data> ```
-
-
-Leaf switch exposes the table *forward_agent* table (with *set_agent_port* action) and the *action_data* is the port number for active agent. 
-
-### Spine switch
-Parsing headers is similar to leaf switch.
-- [**Slides on bloom filter implementation.**](https://adv-net.ethz.ch/pdfs/03_stateful.pdf)
-#### Register arrays
 ```
-// Maintains downstream linkIDs connected to the switch 
-    register<bit<LINK_ID_BITS>>(NUM_SPINE_DS) link_ids;
-
-// Maintains filter bitstrings for each downtream link connected to switch
-    register<bit<32>>(NUM_SPINE_DS) link_bitstrings;
-
-// In case of linkID change, switch can compute new hashes and update filters
-    register<bit<1>>(1) compute_filter;
+p4app run examples/simple_counter.p4app
 ```
-> To enable the switch to calculate  new bitstrings for a given linkID,  we use *compute_filter* bit. This is settable from control plane and in case it is set the P4 will compute a new filter bitstring for the given linkIDs. 
-> **Currently, seems unnecessary as bitstrings can be passed directly by ctrl plane.**
 
-#### Processing packets
-For packets arriving from a leaf switch, spine will forward them on ports given by spine_us using *output_port_select()*.
+If you run this command, p4app will automatically compile `simple_counter.p4`,
+feed it a sequence of input packets defined in `simple_counter.stf`, and make
+sure it gets the output packets it expects. This example uses the "simple
+testing framework", which can help you test small P4 programs and ensure they
+behave the way you expect.
 
-For packets arriving from a core switch:
-For each link connected to the switch, if it was included in the common label, it will replicate the packet on that link/port. Otherwise, it will check the bitwise AND between <link bitstring (from register arrays)> and <spine_ds\> label and  if the result is the same as bitstring packet will be replicated on that link.
+A p4app package contains one program, but it can contain multiple "targets" -
+for example, a p4app might include several different network configurations for
+Mininet, an entire suite of STF tests, or a mix of the two. p4app runs the
+default target, well, by default, but you can specify a target by name this way:
 
-## Limitations and considerations
+```
+p4app run examples/simple_router.p4app mininet
+```
 
-**Multicast forwarding using bitmaps:**
-Using labels (bitmaps) for multicast forwarding could be challenging with current P4 primitives.
-The output port of a packet can be selected by setting "standard_metadata.egress_spec" which is a single port number. 
+That's pretty much it! There's one more useful command, though. p4app caches the
+P4 compiler and tools locally, so you don't have to redownload them every time,
+but from time to time you may want to update to the latest versions. When that
+time comes, run:
 
-The default multicast functionality in P4 is implemented using "standard_metadata.mcast_grp" where a multicast group ID can map to multiple output ports (populated by ctrl plane), and the packet replication engine will handle the replication for multiple ports.
+```
+p4app update
+```
+
+Creating a p4app package
+------------------------
+
+A p4app package has a directory structure that looks like this:
+
+```
+  my_program.p4app
+    |
+    |- p4app.json
+    |
+    |- my_program.p4
+    |
+    |- ...other files...
+```
+
+The `p4app.json` file is a package manifest that tells p4app how to build and
+run a P4 program; it's comparable to a Makefile. Here's one looks:
+
+```
+{
+  "program": "my_program.p4",
+  "language": "p4-14",
+  "targets": {
+    "mininet": {
+      "num-hosts": 2,
+      "switch-config": "my_program.config"
+    }
+  }
+}
+```
+
+This manifest tells p4app that it should run `my_program.p4`, which is written
+in `p4-14` - that's the current version of the P4 language, though you can also
+use `p4-16` to use the P4-16 draft revision. It defines one target, `mininet`,
+and it provides some Mininet configuration options: there will be two hosts on
+the network, and the simulated switch will be configured using the file
+`my_program.config`. When you reference an external file in `p4app.json` like
+this, just place that file in the package, and p4app will make sure that the
+appropriate tools can find it.
+
+If there are multiple targets and the user doesn't specify one by name, p4app
+will run one of the targets, chosen arbitrarily. You can set the default target
+to be run using the `default-target` option. Here's an example with several
+targets:
+
+```
+{
+  "program": "my_program.p4",
+  "language": "p4-14",
+  "default-target": "debug",
+  "targets": {
+    "debug": { "use": "mininet", "num-hosts": 2 },
+    "test1": { "use": "stf", "test": "test1.stf" },
+    "test2": { "use": "stf", "test": "test2.stf" },
+  }
+}
+```
+
+This defines one Mininet target, "debug", and two STF targets, "test1" and
+"test2". The `use` field specifies which backend a target uses; if you don't
+provide it, the target name is also used as the backend name. That's why, in
+the previous example, we didn't have to specify `"use": "mininet"` - the
+target's name is mininet, and that's enough for p4app to know what you mean.
+
+That's really all there is to it. There's one final tip: if you want to share a
+p4app package with someone else, you can run `p4app pack my-program.p4app`, and
+p4app will compress the package into a single file. p4app can run compressed
+packages transparently, so the person you send it to won't even have to
+decompress it. If they want to take a look at the files it contains, though,
+they can just run `p4app unpack my-program.p4app`, and p4app will turn the
+package back into a directory.
+
+Backends
+========
+
+mininet
+-------
+
+This backend compiles a P4 program, loads it into a BMV2
+[simple_switch](https://github.com/p4lang/behavioral-model/blob/master/docs/simple_switch.md),
+and creates a Mininet environment that lets you experiment with it.
+
+The following configuration values are supported:
+
+```
+"mininet": {
+  "num-hosts": 2,
+  "switch-config": "file.config"
+}
+```
+
+All are optional.
+
+The Mininet network will use a star topology, with `num-hosts` hosts each
+connected to your switch via a separate interface.
+
+You can load a configuration into your switch at startup using `switch-config`;
+the file format is just a sequence of commands for the BMV2
+[simple_switch_CLI](https://github.com/p4lang/behavioral-model#using-the-cli-to-populate-tables).
+
+During startup, messages will be displayed telling you information about the
+network configuration and about how to access logging and debugging facilities.
+The BMV2 debugger is especially handy; you can read up on how to use it
+[here](https://github.com/p4lang/behavioral-model/blob/master/docs/p4dbg_user_guide.md).
+
+This target also supports the configuration values for the `compile-bvm2` target.
+
+multiswitch
+-----------
+
+Like `mininet`, this target compiles a P4 program and runs it in a Mininet
+environment. Moreover, this target allows you to run multiple switches with a
+custom topology and execute arbitrary commands on the hosts. The switches are
+automatically configured with l2 and l3 rules for routing traffic to all hosts
+(this assumes that the P4 programs have the `ipv4_lpm`, `send_frame` and
+`forward` tables). For example:
+
+```
+"multiswitch": {
+  "links": [
+    ["h1", "s1"],
+    ["s1", "s2"],
+    ["s2", "h2", 50]
+  ],
+  "hosts": {
+    "h1": {
+      "cmd": "python echo_server.py $port",
+      "startup_sleep": 0.2,
+      "wait": false
+    },
+    "h2": {
+      "cmd": "python echo_client.py h1 $port $echo_msg",
+      "wait": true
+    }
+  },
+  "parameters": {
+    "port": 8000,
+    "echo_msg": "foobar"
+  }
+}
+```
+
+This configuration will create a topology like this:
+
+```
+h1 <---> s1 <---> s2 <---> h2
+```
+
+where the `s2-h2` link has a 50ms artificial delay. The hosts can be configured
+with the following options:
+
+ - `cmd` - the command to be executed on the host.
+ - `wait` - wait for the command to complete before continuing. By setting it
+   to false, you can start a process on the host in the background, like a
+   daemon/server.
+ - `startup_sleep` - the amount of time (in seconds) that should be waited
+   after starting the command.
+ - `latency` - the latency between this host and the switch. This can either be a number (interpreted as seconds) or a string with time units (e.g. `50ms` or `1s`). This overrides the latency set in the `links` object.
+
+The command is formatted by replacing the hostnames (e.g. `h1`) with the
+corresponding IP address. The parameters specified in the target will be
+available to the command as environment variables (i.e. `$` followed by the
+variable name). For an example, have a look at the
+[manifest](examples/multiswitch.p4app/p4app.json) for the multiswitch example
+app.
+
+#### Limitations
+Currently, each host can be connected to at most one switch.
 
 
-### Previous works and possible workarounds
-Elmo implementation needs this primitive as well. It seems like their  [P4 repo](https://github.com/Elmo-MCast/p4-programs/blob/ccbe44c9498c149a2a68c2f36a015c4c52317add/elmo_spine_switch.p4)  are just example codes (not a functional, working code). 
+#### Specifying entries (commands) for each switch
+The routing tables (`ipv4_lpm`, `send_frame` and `forward`) are automatically
+populated with this target. Additionally, you can specify custom commands to be
+run on each switch. You can either include a commands file, or an array of
+commands. These custom commands will be sent before the automatically
+generated ones for the routing tables. For example:
 
-Here in the  [first author's Ph.D. thesis](https://mshahbaz.gitlab.io/files/dissertation.pdf)  (sec. 3.5.1.2) they state that "We add support for specifying this bit vector using a new primitive action in P4.". But it seems for that primitive function they have another isolated design/experiment for ASIC implementation.
+```
+"multiswitch": {
+  "links": [ ... ],
+  "hosts": { ... },
+  "switches": {
+    "s1": {
+      "commands": "s1_commands.txt"
+    },
+    "s2": {
+      "commands": [
+        "table_add ipv4_lpm set_nhop 10.0.1.10/32 => 10.0.1.10 1",
+        "table_add ipv4_lpm set_nhop 10.0.2.10/32 => 10.0.2.10 2"
+      ]
+    }
+  }
+}
+```
 
-#### Elmo using Mellanox ASIC 
-Presentation (does not include the details):
-https://www.youtube.com/watch?v=uaY2dGS1dgs.
+If the commands for `s2` above overlap with the automatically generated commands
+(e.g. there is an automatic entry for `set_nhop 10.0.1.10/32`), these custom
+commands will have precedence and you will see a warning about a duplicate entry
+while the tables are being populated.
 
-Report: 
-https://mshahbaz.gitlab.io/files/p4summit20-elmo.pdf
+#### Custom topology class
+Instead of letting this target create the mininet Topo class, you can use your
+own. Specify the name of your module with the `topo_module` option. For example:
 
-#### Using "clone" primitive (recirculation)
-Another way to implement the bitmap multicast forwarding is using the standard primitive ["clone_ingress_pkt_to_ingress" ](https://p4.org/p4-spec/p4-14/v1.0.5/tex/p4.pdf). 
+```
+"multiswitch": {
+  ...
+  "topo_module": "mytopo"
+  ...
+}
+```
 
-We can use if statements at the ingress (apply{}) to extract the port mappings from the labels (using arithmetic operations) and then set the "egress_spec" for the output port of each replicated packet.
+This will import the `mytopo` module, `mytopo.py`, which should be in the same
+directory as the manifest file (`p4app.json`). The module should implement the
+class `CustomAppTopo`. It can extend the default topo class,
+[apptopo.AppTopo](docker/scripts/mininet/apptopo.py).  For example:
 
-Clone primitive can be used for implementing multicast. But the clone is meant to be performed one-time only for each packet. So in order to realize multicast, one would need to:
- 1. Clone an instance of pkt from ingress to the egress 
- 2. Resubmit the original packet to the ingress pipline for the next output port.
+```
+# mytopo.py
+from apptopo import AppTopo
 
-Which hurts the performance as the number of output ports increases.
+class CustomAppTopo(AppTopo):
+    def __init__(self, *args, **kwargs):
+        AppTopo.__init__(self, *args, **kwargs)
 
-In a recent work, for implementing BIER multicast:
-https://www.ietf.org/proceedings/108/slides/slides-108-bier-05-bier-in-p4-00
+        print self.links()
+```
 
-> Also, output port of a clone (similar to multicast group id) can be decided via mirror_session_id which is only manageable by the control plane so it won't work for our case.
+See the [customtopo.p4app](examples/customtopo.p4app/mytopo.py) working example.
+
+#### Custom controller
+Similarly to the `topo_module` option, you can specify a controller with the
+`controller_module` option. This module should implement the class
+`CustomAppController`. The default controller class is
+[appcontroller.AppController](docker/scripts/mininet/appcontroller.py). You can
+extend this class, as shown in the
+[customtopo.p4app](examples/customtopo.p4app/mycontroller.py) example.
+
+### Custom host process runner
+The AppProcRunner class is responsible for executing programs in each of the
+mininet hosts. By specifying the `controller_module` option, you can override
+the default behaviour for launching and killing programs on the hosts. This
+module should implement the class `CustomAppProcRunner`. The default controller
+class is
+[appprocrunner.AppProcRunner](docker/scripts/mininet/appprocrunner.py). You can
+extend this class, as shown in the
+[customtopo.p4app](examples/customtopo.p4app/myprocrunner.py) example.
 
 
-#### Broadcast to egress pipeline
-One option that would work with current limitations would be to use a dummy multicast group that contains all of the output ports so N pkts will be replicated by the replication engine (PRE) and then drop the undesired ones at the egress pipeline based on the label. Which I think comes with a performance penalty.
+#### Logging
+When this target is run, a temporary directory on the host, `/tmp/p4app_log`,
+is mounted on the guest at `/tmp/p4app_log`. All data in this directory is
+persisted to the host after running the p4app. The stdout from the hosts'
+commands is stored in this location. If you need to save the output (e.g. logs)
+of a command, you can also put that in this directory.
 
-### Hardware-Specific Considerations
-*How logical operations written in P4 are mapped to low-level gates in hardware and how it affects the performance?*
+To save the debug logs from the P4 switches, set `"bmv2_log": true` in the
+target. To capture PCAPs from all switches, set `"pcap_dump": true`. These
+files will be saved to `/tmp/p4app_log`. For example usage, see the
+[manifest](examples/broadcast.p4app/p4app.json) for the broadcast example app.
 
-We need to perform some (simple) operations for every downstream link. For example, spine could process each port independently and in parallel in a handful of clock cycles.
+#### Cleanup commands
+If you need to execute commands in the docker container after running the
+target (and before Mininet is stopped), you can use `after`. `after` should
+contain `cmd`, which can either be a command or a list of commands. For
+example:
 
-Example of previous works:
- Containing complex nested operations:
-They perform 8 match-actions for handling decisions based on bitmap in [NetCache](https://github.com/dlekkas/netcache/blob/master/src/p4/core/ingress.p4).
-NetCache is able to do all of them at line rate.
+```
+"multiswitch": {
+  "links": [ ... ],
+  "hosts": { ... },
+  "after": {
+    "cmd": [
+      "echo register_read my_register 1 | simple_switch_CLI --json p4src/my_router.p4.json",
+      "echo register_read my_register 2 | simple_switch_CLI --json p4src/my_router.p4.json"
+    ]
+  }
+}
+```
 
-## Implementing portmap extern function in software target
-> This would help us to develop, run and test our P4 programs on software switch. But even with the software support for bitmap forwarding, it does not mean that hardware that supports BMv2 would support this function.
+custom
+-----------
 
-Note that p4app image is built on top of multiple p4-related images. We need to rebuild "p4lang/behavioral-model" after modifications:
- ```
- p4lang/p4app -> p4lang/p4c -> p4lang/behavioral-model -> p4lang/pi -> p4lang/third-party -> ubuntu:16.04
- ```
+This is a third method for compiling a P4 program to run in a Mininet
+environment. This target allows you to specify a Python `program` that
+uses Mininet's Python API to specify the network topology and configuration.
+For example:
 
-### Examples of defining an extern function
-These are the related issues I could find for extern implementation:
-* [https://github.com/p4lang/behavioral-model/issues/803](https://github.com/p4lang/behavioral-model/issues/803)  
-* [https://github.com/p4lang/behavioral-model/issues/697](https://github.com/p4lang/behavioral-model/issues/697)  
+```
+{
+  "program": "source_routing.p4",
+  "language": "p4-14",
+  "targets": {
+      "custom": {
+	       "program": "topo.py"
+      }
+  }
+}
 
-It seems like after implementing the logic, using "BM_REGISTER_EXTERN()"  macros from behaviral_model repo ("bm/bm_sim/extern.h") one can add the extern name so that p4 compiler recognizes the extern function.
+```
 
-* Working extern function example (PSA target):
-https://github.com/p4lang/behavioral-model/blob/master/targets/psa_switch/externs/psa_counter.h
+This target will invoke the python script `topo.py` to start Mininet.
+The `program` will be called with the following arguments:
 
-* **Steps for adding extern** :[https://github.com/p4lang/behavioral-model/pull/834/files](https://github.com/p4lang/behavioral-model/pull/834/files)
+| Argument         | Description |
+| --------         | ----------- |
+| --behavioral-exe | Value will be the switch executable |
+| --json           | Value will be the P4 compiler output |
+| --cli            | Value will be the switch command line interface program |
 
+Example invocation:
+
+```
+PYTHONPATH=$PYTHONPATH:/scripts/mininet/ python2 topo.py \
+                        --behavioral-exe simple_switch \
+                        --json SOME_FILE \
+                        --cli simple_switch_CLI
+```
+
+You can specify additional arguments to pass to your custom topology program by
+including them in your `program` definition as follows:
+
+```
+{
+  "program": "source_routing.p4",
+  "language": "p4-14",
+  "targets": {
+      "custom": {
+	       "program": "topo.py --num-hosts 2 --switch-config simple_router.config"
+      }
+  }
+}
+
+```
+
+The `program` can find the docker container ID in the `HOSTNAME` environment
+variable so that it can output useful commands for copy/paste:
+
+```python
+import os
+container = os.environ['HOSTNAME']
+print 'Run the switch CLI as follows:'
+print '  docker exec -t -i %s %s' % (container, args.cli)
+```
+
+stf
 ---
 
-### What needs to be modified?
+This target compiles the provided P4 program and run a test against it written
+for the STF testing framework.
 
-#### targets/simple_switch/simple_switch.cpp
-This is where ingress and egress packet processing is implemented.
-The default multicast is implemented using mgid (multicast group ID) [@line 604].
-The multicast() function [@line 455] uses PRE (packet replication engine [section 7.3](https://p4.org/p4-spec/docs/PSA.pdf)) to handle replication and puts each copy on egress.
+There is one configuration value, which is required:
 
-#### src/bm_sim/simple_pre.cpp:
-This is where packet replication is handled and it only exposes replicate() function to the data plane (simple_switch.cpp).
-The replicate() [@line 269] function also decides the egress port_id (form of 0,1,2).
-
-Apparently, the internal data structure for output ports inside PRE is in form of portmap [@line286], but they use the set bits in the map and convert them to port_id list.
-
-The problem is at the end of the pipeline [simple_switch.cpp @line385], egress_port is used for transmitting packet so any portmap can not be used at the end of the pipeline.
-
---- 
-
-A feasible solution might be to change the codes in simple_pre.cpp [@line286], to use our input bitmap (orca labels) to generate the port_ids instead of using l2_entry.port_map. Because  l2_entry.port_map  is generated based on processing mcast group entries and we already have this port map as our label.
-
-However, I think this is not acceptable to modify the PRE as they mention that this part of the pipeline is not programmable in PSA.
-
-## Running instructions
-1.  Install  [docker](https://docs.docker.com/engine/installation/).
-2. 
 ```
-git clone https://github.com/parhamyassini/p4app.git
-cd p4app
-cp p4app /usr/local/bin
-p4app run examples/simple_router.p4app
-p4app build examples/orca_leaf
-p4app run examples/orca_leaf
+"stf": {
+  "test": "file.stf"
+}
+```
+
+You must write the file specified by `test` in the STF format, which is
+unfortunately currently undocumented. (If you'd like to reverse engineer it and
+provide some documentation, please submit a PR!) You can take a look at the
+example p4apps included in this repo to get a sense of the basics.
+
+This target also supports the configuration values for the `compile-bvm2` target.
+
+compile-bmv2
+------------
+
+This is a simple backend that just attempts to compile the provided P4 program
+for the BMV2 architecture.
+
+The following optional configuration values are supported:
+
+```
+"compile-bmv2": {
+  "compiler-flags": ["-v", "-E"],
+  "run-before-compile": ["date"],
+  "run-after-compile": ["date"]
+}
+```
+
+Advanced Features
+=================
+
+If you're hacking on the P4 toolchain or p4app itself, you may want to use a
+modified Docker image instead of the standard p4lang one. That's easy to do;
+just set the `P4APP_IMAGE` environment variable to the Docker image you'd like
+to use. For example:
+
+```
+P4APP_IMAGE=me/my_p4app_image:latest p4app run examples/simple_router.p4app
+```
+
+#### Specify the name of the manifest file
+By default, p4app will use the manifest file called `p4app.json` in the app's
+directory. If your manifest file is not called `p4app.json`, you can use the
+`--manifest` option to specify the name of the manifest. For example:
+
+```
+p4app run myapp.p4app --manifest testing.p4app
+```
+
+#### Specify location of log directory
+By default, p4app will mount the directory `/tmp/p4app_logs` on the host to
+`/tmp/p4app_logs` on the docker container guest. The output from bmv2, as well
+as any output from your programs, will be saved to this directory.  Instead of
+using the default directory (`/tmp/p4app_logs`), you can specify another
+directory with the `$P4APP_LOGDIR` environment variable. For example, if you
+run:
+
+```
+P4APP_LOGDIR=./out p4app run myapp.p4app
+```
+
+all the log files will be stored to `./out`.
+
+
+Executing Commands Interactively
+================================
+
+To run commands interactively on a currently running p4app, you can use
+
+```
+p4app exec command arg1 arg2 ...
+```
+
+This will run a command in a currently running p4app instance. If there are
+multiple instances running, the command will be executed on the most recently
+started p4app.
+
+To run a command on a Mininet host, you can use the Mininet `m` utility script,
+which is included in p4app. For example, run `ping` on Mininet host `h1`:
+
+```
+p4app exec m h1 ping 10.0.2.101
+```
+
+You can also run `tcpdump` on the Mininet host to see packets in realtime with
+Wireshark:
+```
+p4app exec m h1 tcpdump -Uw - | wireshark -ki -
 ```
