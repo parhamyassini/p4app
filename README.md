@@ -3,14 +3,14 @@
 # Orca P4 Docs
 > For p4app documentations refer to https://github.com/p4lang/p4app.
 
-At the current stage, we think implementation of Orca logic on both spine and leaf (and core) would be straightforward. Current version of P4 codes contain a sketch solution (compilable) for both switches. 
+At the current stage, we think implementation of Orca logic on both spine and leaf (and core) would be straightforward. The current version of P4 codes contains a sketch solution (compilable) for both switches. 
 
 The problem is that multicast functionality in P4 heavily relies on tables that are only manageable by the control plane.
 
 Main challenges for realizing Orca (or any source-routed multicast) on programmable switches would be:
 1. Exposing output port bitmaps to the processing pipelines
 2. Allowing packet replication engine to replicate based on the bitmaps.
-3. Hardware-specific considerations for efficieny of processing (E.g Orca Spine per-link operations).
+3. Hardware-specific considerations for the efficiency of processing (E.g Orca Spine per-link operations).
 
 **Contents**
 - [Details of current codes](#details-of-current-codes)
@@ -25,7 +25,7 @@ Main challenges for realizing Orca (or any source-routed multicast) on programma
 - [Limitations and considerations](#limitations-and-considerations)
   * [Previous works and possible workarounds](#previous-works-and-possible-workarounds)
     + [Elmo using Mellanox ASIC](#elmo-using-mellanox-asic)
-    + [Using "clone" premitive (recirculation)](#using-clone-premitive-recirculation)
+    + [Using "clone" primitive (recirculation)](#using-clone-primitive-recirculation)
     + [Broadcast to egress pipeline](#broadcast-to-egress-pipeline)
   * [Hardware-Specific Considerations](#hardware-specific-considerations)
 - [Implementing portmap extern function in software target](#implementing-portmap-extern-function-in-software-target)
@@ -49,17 +49,17 @@ Orca header stack:
  
 
 ### Leaf Switch
-The perliminary implementation of leaf switch is available  in ``p4app/examples/orca_leaf``.
+The preliminary implementation of the leaf switch is available  in ``p4app/examples/orca_leaf``.
 
 #### Parsing headers
-When a packet arrives at leaf switch it contains either *src_label_t* or *leaf_label_t* headers.  We define a header union orca_label_t which indicates one of these headers is valid for any packet arriving.
+When a packet arrives at the leaf switch it contains either *src_label_t* or *leaf_label_t* headers.  We define a header union orca_label_t which indicates one of these headers is valid for any packet arriving.
 
 The parser will extract the *orca_status_label* and based on the *leaf_status_bit* it decides that the packet should contain *src_label* or *leaf_label* and extract the correct header.
 
 ####  Processing packets
-After completion of parser stage, the switch will make decisisions based on the headers:
+After completion of parser stage, the switch will make decisions based on the headers:
  ```
-If packet conatins *src_label*
+If packet contains *src_label*
 	 If it is coming from a spine link:
 			Match on the leaf_status_bit and forwards the packet
 			to the active agent port (given by control plane).
@@ -74,7 +74,7 @@ Else if packet contains *leaf_label*:
 
 
 #### Control plane 
-> Only control plane functionality for  packet forwarding were implemented. additional commands will be needed for exchanging health check packets between dataplane and control plane.
+> Only control plane functionality for  packet forwarding was implemented. Additional commands will be needed for exchanging health check packets between data plane and control plane.
 
 Example control plane commands are written in `p4app/examples/orca_leaf/orca_leaf.config`.
 
@@ -98,14 +98,14 @@ Parsing headers is similar to leaf switch.
 // In case of linkID change, switch can compute new hashes and update filters
     register<bit<1>>(1) compute_filter;
 ```
-> To enable the switch to calculate  new bistrings for a given linkID,  we use *compute_filter* bit. This is setable from control plane and in case it is set the P4 will compute a new filter bitstring for the given linkIDs. 
-> **Currently, seems unecessary as bitstrings can be passed dirctly by ctrl plane.**
+> To enable the switch to calculate  new bitstrings for a given linkID,  we use *compute_filter* bit. This is settable from control plane and in case it is set the P4 will compute a new filter bitstring for the given linkIDs. 
+> **Currently, seems unnecessary as bitstrings can be passed directly by ctrl plane.**
 
 #### Processing packets
 For packets arriving from a leaf switch, spine will forward them on ports given by spine_us using *output_port_select()*.
 
 For packets arriving from a core switch:
-For each link connected to the switch, if it was included in common label, it will replicate the packet on that link/port. Otherwise, it will check the bitwise AND between <link bitstring (from register arrays)> and <spine_ds\> label and  if the result is same as bitstring packet will be replicated on that link.
+For each link connected to the switch, if it was included in the common label, it will replicate the packet on that link/port. Otherwise, it will check the bitwise AND between <link bitstring (from register arrays)> and <spine_ds\> label and  if the result is the same as bitstring packet will be replicated on that link.
 
 ## Limitations and considerations
 
@@ -128,7 +128,7 @@ https://www.youtube.com/watch?v=uaY2dGS1dgs.
 Report: 
 https://mshahbaz.gitlab.io/files/p4summit20-elmo.pdf
 
-#### Using "clone" premitive (recirculation)
+#### Using "clone" primitive (recirculation)
 Another way to implement the bitmap multicast forwarding is using the standard primitive ["clone_ingress_pkt_to_ingress" ](https://p4.org/p4-spec/p4-14/v1.0.5/tex/p4.pdf). 
 
 We can use if statements at the ingress (apply{}) to extract the port mappings from the labels (using arithmetic operations) and then set the "egress_spec" for the output port of each replicated packet.
@@ -146,12 +146,12 @@ https://www.ietf.org/proceedings/108/slides/slides-108-bier-05-bier-in-p4-00
 
 
 #### Broadcast to egress pipeline
-One option that would work with current limitations would be to use a dummy multicast group that contains all of the output ports so N pkts will be replicated by the replication engine (PRE) and then drop the undesired ones at egress pipeline based on the label. Which I think comes with a performance penalty.
+One option that would work with current limitations would be to use a dummy multicast group that contains all of the output ports so N pkts will be replicated by the replication engine (PRE) and then drop the undesired ones at the egress pipeline based on the label. Which I think comes with a performance penalty.
 
 ### Hardware-Specific Considerations
 *How logical operations written in P4 are mapped to low-level gates in hardware and how it affects the performance?*
 
-We need to perform some (simple) operations for every downstream link. For example spine could process each port independently and in parallel in a handful of clock cycles.
+We need to perform some (simple) operations for every downstream link. For example, spine could process each port independently and in parallel in a handful of clock cycles.
 
 Example of previous works:
  Containing complex nested operations:
@@ -191,7 +191,7 @@ The multicast() function [@line 455] uses PRE (packet replication engine [sectio
 This is where packet replication is handled and it only exposes replicate() function to the data plane (simple_switch.cpp).
 The replicate() [@line 269] function also decides the egress port_id (form of 0,1,2).
 
-Apparently, the internal datastructure for output ports inside PRE is in form of portmap [@line286], but they use the set bits in the map and convert them to port_id list.
+Apparently, the internal data structure for output ports inside PRE is in form of portmap [@line286], but they use the set bits in the map and convert them to port_id list.
 
 The problem is at the end of the pipeline [simple_switch.cpp @line385], egress_port is used for transmitting packet so any portmap can not be used at the end of the pipeline.
 
