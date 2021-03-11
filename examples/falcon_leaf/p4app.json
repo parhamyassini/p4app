@@ -1,0 +1,10 @@
+{
+  "program": "falcon_leaf.p4",
+  "language": "p4-16",
+  "targets": {
+    "mininet": {
+      "num-hosts": 8,
+      "switch-config": "falcon_leaf.config"
+    }
+  }
+}
