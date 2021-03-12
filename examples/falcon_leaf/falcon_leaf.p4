@@ -9,9 +9,9 @@
 // Used by spine schedulers, currently hardcoded (can be set from ctrl plane)
 #define SWITCH_ID 1
 
-typedef bit<HDR_QUEUE_LEN_SIZE> queue_len_t;
+typedef bit<8> queue_len_t;
 typedef bit<9> port_id_t;
-typedef bit<8> worker_id_t;
+typedef bit<16> worker_id_t;
 
 typedef bit<QUEUE_LEN_FIXED_POINT_SIZE> len_fixed_point_t;
 
@@ -31,23 +31,22 @@ control egress(inout headers hdr, inout metadata meta, inout standard_metadata_t
 }
 
 control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_t standard_metadata) {
-    register<port_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_iq_sched; // Spine that ToR has sent last IdleSignal.
-    register<port_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_sq_sched; // Spine that ToR has sent last QueueSignal.
+    register<bit<16>>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_iq_sched; // Spine that ToR has sent last IdleSignal.
+    register<bit<16>>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_sq_sched; // Spine that ToR has sent last QueueSignal.
     
     // List of idle workers up to 8 (idle workers) * 128 (clusters) 
     // Value 0x00 means Non-valid (NULL)
     register<worker_id_t>((bit<32>) 1024) idle_list; 
-    register<bit<8>>((bit<32>) NUM_VCLUSTERS_PER_RACK) idle_count; // Idle count for each cluster, acts as pointer going frwrd and backwrd to point to idle worker list
+    register<bit<HDR_SRC_ID_SIZE>>((bit<32>) NUM_VCLUSTERS_PER_RACK) idle_count; // Idle count for each cluster, acts as pointer going frwrd and backwrd to point to idle worker list
 
-    register<worker_id_t>((bit <32>) 1024) queue_len_list; // List of queue lens 8 (workers) * 128 (clusters)
+    register<queue_len_t>((bit <32>) 1024) queue_len_list; // List of queue lens 8 (workers) * 128 (clusters)
     register<queue_len_t>((bit <32>) NUM_VCLUSTERS_PER_RACK) aggregate_queue_len_list;
 
-
     register<queue_len_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_iq_len_1;
-    register<queue_len_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_iq_len_2;
+    //register<queue_len_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_iq_len_2;
 
-    register<worker_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_sw_id_1;
-    register<worker_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_sw_id_2;
+    register<worker_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_probed_id;
+    //register<worker_id_t>((bit<32>) NUM_VCLUSTERS_PER_RACK) spine_sw_id_2;
 
     //register<bit<16>>((bit <32>) 1024) workers_per_cluster;
     //register<bit<16>>((bit <32>) 1024) spines_per_cluster;
@@ -84,7 +83,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds);
     }
 
-    action act_get_cluster_num_valid_ds(bit<8> num_ds_elements) {
+    action act_get_cluster_num_valid_ds(bit<16> num_ds_elements) {
         meta.falcon_meta.cluster_num_valid_ds = num_ds_elements;
     }
 
@@ -132,9 +131,9 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         queue_len_list.read(meta.falcon_meta.qlen_rand_1, (bit<32>) meta.falcon_meta.random_downstream_id_1);
         queue_len_list.read(meta.falcon_meta.qlen_rand_2, (bit<32>) meta.falcon_meta.random_downstream_id_2);
         if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
-            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.qlen_rand_2;
+            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_2;
         } else {
-            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.qlen_rand_1;
+            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_1;
         }
     }
 
@@ -144,9 +143,32 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         queue_len_list.write((bit<32>)meta.falcon_meta.selected_downstream_id, meta.falcon_meta.qlen_curr);        
     }
 
+    action act_check_last_probe() {
+        spine_iq_len_1.read(meta.falcon_meta.last_idle_list_len, (bit<32>) hdr.falcon.local_cluster_id);
+        spine_probed_id.read(meta.falcon_meta.last_idle_probe_id, (bit<32>) hdr.falcon.local_cluster_id);
+    }
+
+    action act_update_probe() {
+        spine_iq_len_1.write((bit<32>)hdr.falcon.local_cluster_id, hdr.falcon.qlen);
+        spine_probed_id.write((bit<32>)hdr.falcon.local_cluster_id, hdr.falcon.src_id);
+    }
+
+    action act_reset_probe_state() {
+        linked_iq_sched.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.shortest_idle_queue_id);
+        spine_iq_len_1.write((bit<32>) hdr.falcon.local_cluster_id, 0xFF);
+    }
+
+    action act_read_linked_sq() {
+        linked_sq_sched.read(meta.falcon_meta.linked_sq_id, (bit<32>) hdr.falcon.local_cluster_id);
+    }
+
+    action act_update_linked_sq() {
+        linked_sq_sched.write((bit<32>) hdr.falcon.local_cluster_id, hdr.falcon.src_id);
+    }
+
     table set_queue_len_unit {
         key = {
-            hdr.falcon.cluster_id: exact;
+            hdr.falcon.local_cluster_id: exact;
         }
         actions = {
             act_set_queue_len_unit;
@@ -233,19 +255,43 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = act_increment_queue_len;
     }
 
-    
+    table check_last_probe {
+        actions = {act_check_last_probe;}
+        default_action = act_check_last_probe;
+    }
+
+    table update_probe {
+        actions = {act_update_probe;}
+        default_action = act_update_probe;
+    }
+
+    table reset_probe_state {
+        actions = {act_reset_probe_state;}
+        default_action = act_reset_probe_state;
+    }
+
+    table read_linked_sq {
+        actions = {act_read_linked_sq;}
+        default_action = act_read_linked_sq;
+    }
+
+    table update_linked_sq {
+        actions = {act_update_linked_sq;}
+        default_action = act_update_linked_sq;
+    }
+
     apply {
         if (hdr.falcon.isValid()) {
             read_idle_count.apply();
+            read_linked_sq.apply();
             if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE || hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE) {
                 set_queue_len_unit.apply();
                 decrement_queue_len.apply();
-                port_id_t target_port; 
-                linked_sq_sched.read(target_port, (bit<32>) hdr.falcon.local_cluster_id);
-                if (target_port != 0) { // not Null. TODO fix Null value 0 port is valid
+                if (meta.falcon_meta.linked_sq_id != 0xFF) { // not Null. TODO: fix Null value 0xFF port is valid
                     hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
                     hdr.falcon.qlen = meta.falcon_meta.qlen_agg; // Reporting agg qlen to Spine
-                    standard_metadata.egress_spec = target_port;
+                    // TODO: Fix forwarding (use layer 2 routing)
+                    standard_metadata.egress_spec = (bit<9>)meta.falcon_meta.linked_sq_id;
                 }
                 if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE) {
                     if (meta.falcon_meta.cluster_idle_count < MAX_IDLE_WORKERS_PER_CLUSTER) {
@@ -260,6 +306,10 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     }
                 }
             } else if(hdr.falcon.pkt_type == PKT_TYPE_NEW_TASK) {
+                /*
+                 TODO @parham: Remove the ToR from linked spine if the packet is coming based on random decision
+                 This needs a copy of packet (original task) to go to the server and another copy (ctrl msg) to send to linked_iq
+                */
                 if (meta.falcon_meta.cluster_idle_count > 0) { //Idle workers available
                     pop_from_idle_list.apply();
                     if (meta.falcon_meta.cluster_idle_count == 1) { // No more idle after this assignment
@@ -273,7 +323,36 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                 }
                 increment_queue_len.apply();
                 forward_falcon.apply();
-            } 
+            } else if (hdr.falcon.pkt_type == PKT_TYPE_PROBE_IDLE_RESPONSE){
+                if (meta.falcon_meta.cluster_idle_count > 0) { // Still idle workers available
+                    check_last_probe.apply();
+                    if (meta.falcon_meta.last_idle_list_len == 0xFF) { // Not set yet, this is first probe response
+                        update_probe.apply();
+                    } else { // This is the the second probe response
+                        if (meta.falcon_meta.last_idle_list_len >= hdr.falcon.qlen) {
+                            spine_probed_id.read(meta.falcon_meta.shortest_idle_queue_id, (bit<32>) hdr.falcon.local_cluster_id);
+                            } else { // The spine that just sent its idle len is target
+                                meta.falcon_meta.shortest_idle_queue_id = hdr.falcon.src_id;
+                            }
+                            // Send idle signal to spine sw
+                            standard_metadata.egress_spec = (bit<9>) meta.falcon_meta.shortest_idle_queue_id;
+                            hdr.falcon.pkt_type = PKT_TYPE_IDLE_SIGNAL;
+                            reset_probe_state.apply();
+                    }
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_QUEUE_REMOVE) {
+                    linked_sq_sched.write((bit<32>) hdr.falcon.local_cluster_id, 0xFF);
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_SCAN_QUEUE_SIGNAL) {
+                    if (meta.falcon_meta.linked_sq_id == 0xFF) {
+                        update_linked_sq.apply();
+                        hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
+                        hdr.falcon.qlen = meta.falcon_meta.qlen_agg; // Reporting agg qlen to Spine
+                        standard_metadata.egress_spec = (bit<9>) meta.falcon_meta.linked_sq_id;
+                    }
+                }
+                else {
+                    mark_to_drop(standard_metadata);
+                }
+            }
             
         } else {
             // Apply regular switch procedure
