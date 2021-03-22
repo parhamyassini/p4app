@@ -20,7 +20,11 @@ from scapy.all import sniff, sendp
 from scapy.all import Packet
 from scapy.all import ShortField, IntField, LongField, BitField
 
+from falconpkts.pkts import *
+
 import sys
+
+FALCON_PORT = 1234
 
 class SrcRoute(Packet):
     name = "SrcRoute"
@@ -47,8 +51,18 @@ def read_topo():
     return int(nb_hosts), int(nb_switches), links
 
 def main():
-    #sendp("I'm travelling on Ethernet")
-    send(IP(dst="10.0.2.101")/ICMP())
+    eth_kwargs = {
+        'src_mac': '01:02:03:04:05:06',
+        'dst_mac': 'AA:BB:CC:DD:EE:FF'
+    }
+
+    _dst_ip = '10.0.2.101'
+
+    new_task_packet = make_falcon_task_pkt(dst_ip=_dst_ip, cluster_id=5, local_cluster_id=1, src_id=6, **eth_kwargs)
+    print('>> New Task packet (size = %d bytes):' % len(new_task_packet))
+    new_task_packet.show()
+
+    send(new_task_packet)
 
 if __name__ == '__main__':
     main()
