@@ -78,23 +78,6 @@ def make_eth_hdr(src_mac=None, dst_mac=None, ip_encap=False, **kwargs):
     return hdr
 
 def make_falcon_task_pkt(dst_ip, cluster_id, local_cluster_id, src_id, q_len=0, seq_num=1000, pkt_len=128, **kwargs):
-    """
-    Creates a new task packet
-
-    Parameters:
-        label (int): mDC label (4 bytes)
-        pkt_len (int): packet size including the headers
-        ip_encap (bool): True if MDC pkt is embedded in IP header
-        src_mac (str): source MAC address
-        dst_mac (str): destination MAC address
-        src_ip (str): has effect iff ip_encap=True. generated randomly if not provided
-        dst_ip (str): has effect iff ip_encap=True. generated randomly if not provided
-
-    Returns:
-        scapy.Packet: a new packet
-
-    """
-
     eth_hdr = make_eth_hdr(**kwargs)
     falcon_hdr = FalconPacket(pkt_type=PKT_TYPE_NEW_TASK, cluster_id=cluster_id, local_cluster_id=local_cluster_id, src_id=src_id, q_len=q_len, seq_num=seq_num)
 
@@ -102,7 +85,14 @@ def make_falcon_task_pkt(dst_ip, cluster_id, local_cluster_id, src_id, q_len=0, 
     if data_len <= 0:
         data_len = 1
     payload = generate_load(data_len)
-    pkt = scapy.IP(dst=dst_ip) / scapy.UDP(dport=FALCON_PORT) / payload
+    pkt = scapy.IP(dst=dst_ip) / scapy.UDP(dport=FALCON_PORT) / falcon_hdr / payload
+    return pkt
+
+
+def make_falcon_task_done_pkt(dst_ip, cluster_id, local_cluster_id, src_id, q_len=0, seq_num=1000, pkt_len=128, **kwargs):
+    eth_hdr = make_eth_hdr(**kwargs)
+    falcon_hdr = FalconPacket(pkt_type=PKT_TYPE_TASK_DONE, cluster_id=cluster_id, local_cluster_id=local_cluster_id, src_id=src_id, q_len=q_len, seq_num=seq_num)
+    pkt = scapy.IP(dst=dst_ip) / scapy.UDP(dport=FALCON_PORT) / falcon_hdr
     return pkt
 
 # def make_mdc_ping_pkt(agent, **kwargs):

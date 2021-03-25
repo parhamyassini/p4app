@@ -1,4 +1,10 @@
 table_add set_queue_len_unit act_set_queue_len_unit 0 => 0x01
+
+table_add get_cluster_num_valid_ds act_get_cluster_num_valid_ds 5 => 0x02
+
+register_write queue_len_list 0 0x1ADB1
+register_write queue_len_list 1 0x0ADB1
+
 register_write spine_iq_len_1 0 255
 register_write spine_iq_len_1 1 255
 register_write spine_iq_len_1 2 255

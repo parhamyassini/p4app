@@ -119,6 +119,7 @@ struct falcon_metadata_t {
     bit<HDR_SRC_ID_SIZE> cluster_idle_count;
     bit<16> idle_worker_index;
     bit<16> worker_index;
+    bit<16> cluster_worker_start_idx;
 }
 
 struct ingress_metadata_t {

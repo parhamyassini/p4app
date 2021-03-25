@@ -24,8 +24,6 @@ from falconpkts.pkts import *
 
 import sys
 
-FALCON_PORT = 1234
-
 class SrcRoute(Packet):
     name = "SrcRoute"
     fields_desc = [
@@ -63,6 +61,7 @@ def main():
     new_task_packet.show()
 
     send(new_task_packet)
+
 
 if __name__ == '__main__':
     main()

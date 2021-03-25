@@ -11,16 +11,16 @@
       "hosts": {
         "h1": {
             "cmd": "python3 host_send.py",
-            "startup_sleep": 0.2,
+            "startup_sleep": 0.9,
             "wait": true
         },
         "h2": {
-            "cmd": "./host_recv.py h2",
+            "cmd": "python3 host_recv.py h2 0 0",
             "startup_sleep": 0.2,
             "wait": false
         },
         "h3": {
-            "cmd": "./host_recv.py h3",
+            "cmd": "python3 host_recv.py h3 1 1",
             "wait": false
         }
       },

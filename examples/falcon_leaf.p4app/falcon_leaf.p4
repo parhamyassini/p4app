@@ -60,8 +60,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         TODO: Use modify_field_rng_uniform instead of random<> for hardware targets
         This is not implemented in bmv but available in Hardware. 
         */
-        //modify_field_rng_uniform(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);
-        
+        //modify_field_rng_uniform(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);   
         random<bit<HDR_FALCON_RAND_GROUP_SIZE>>(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);
     }
 
@@ -75,12 +74,14 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action act_gen_random_worker_id_1() {
         //modify_field_rng_uniform(meta.falcon_meta.random_downstream_id_1, 0, meta.falcon_meta.cluster_num_valid_ds);
-        random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_1, 0, meta.falcon_meta.cluster_num_valid_ds);
+        random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_1, 0, meta.falcon_meta.cluster_num_valid_ds - 1);
+        meta.falcon_meta.random_downstream_id_1 = meta.falcon_meta.random_downstream_id_1 + meta.falcon_meta.cluster_worker_start_idx;
     }
 
     action act_gen_random_worker_id_2() {
         //modify_field_rng_uniform(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds);
-        random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds);
+        random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds - 1);
+        meta.falcon_meta.random_downstream_id_2 = meta.falcon_meta.random_downstream_id_2 + meta.falcon_meta.cluster_worker_start_idx;
     }
 
     action act_get_cluster_num_valid_ds(bit<16> num_ds_elements) {
@@ -89,34 +90,37 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action act_read_idle_count() {
         idle_count.read(meta.falcon_meta.cluster_idle_count, (bit<32>) hdr.falcon.local_cluster_id);
-        /* TODO: use "add_to_field" for hardware targets, simply "+" in bvm */
-        meta.falcon_meta.cluster_idle_count = meta.falcon_meta.cluster_idle_count + 1;
-        meta.falcon_meta.idle_worker_index = (bit <16>) meta.falcon_meta.cluster_idle_count + (bit <16>) hdr.falcon.local_cluster_id * MAX_WORKERS_PER_CLUSTER;
-        
-        //add_to_field(meta.falcon_meta.cluster_idle_count, 1);
+        meta.falcon_meta.cluster_worker_start_idx = (bit <16>) (hdr.falcon.local_cluster_id * MAX_WORKERS_PER_CLUSTER);
+        /* TODO: use "add_to_field()" for hardware targets, simply "+" in bvm */
+        //meta.falcon_meta.cluster_idle_count = meta.falcon_meta.cluster_idle_count + 1;
+        meta.falcon_meta.idle_worker_index = (bit <16>) meta.falcon_meta.cluster_idle_count + meta.falcon_meta.cluster_worker_start_idx;
+    
         //add_to_field(meta.falcon_meta.idle_worker_index, meta.falcon_meta.cluster_idle_count);
         //add_to_field(meta.falcon_meta.idle_worker_index, hdr.falcon.local_cluster_id);
     }
 
     action act_add_to_idle_list() {
         idle_list.write((bit<32>) meta.falcon_meta.idle_worker_index, hdr.falcon.src_id);
+        meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index + 1;
+        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
     }
 
     action act_pop_from_idle_list () {
         idle_list.read(meta.falcon_meta.idle_downstream_id, (bit<32>) meta.falcon_meta.idle_worker_index);
         meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index - 1;
+        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
         //add_to_field(meta.falcon_meta.idle_worker_index, -1);
     }
 
     action act_decrement_queue_len() {
         // Update queue len
-        meta.falcon_meta.worker_index = (bit<16>) hdr.falcon.src_id + ((bit<16>) hdr.falcon.local_cluster_id * MAX_WORKERS_PER_CLUSTER);
+        meta.falcon_meta.worker_index = (bit<16>) hdr.falcon.src_id + meta.falcon_meta.cluster_worker_start_idx;
         queue_len_list.read(meta.falcon_meta.qlen_curr, (bit<32>)meta.falcon_meta.worker_index);
         meta.falcon_meta.qlen_curr = meta.falcon_meta.qlen_curr - meta.falcon_meta.queue_len_unit;
         queue_len_list.write((bit<32>)meta.falcon_meta.worker_index, meta.falcon_meta.qlen_curr);
 
         aggregate_queue_len_list.read(meta.falcon_meta.qlen_agg, (bit<32>) hdr.falcon.local_cluster_id);
-        meta.falcon_meta.qlen_agg = meta.falcon_meta.qlen_agg - 1;
+        meta.falcon_meta.qlen_agg = meta.falcon_meta.qlen_agg - meta.falcon_meta.queue_len_unit;
         aggregate_queue_len_list.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.qlen_agg);
     }
 
@@ -125,9 +129,9 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     }
 
     action act_cmp_random_qlen() {
-        if (meta.falcon_meta.random_downstream_id_1 == meta.falcon_meta.random_downstream_id_2){
-            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_1;
-        }
+        // if (meta.falcon_meta.random_downstream_id_1 == meta.falcon_meta.random_downstream_id_2){
+        //     meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_1;
+        // }
         queue_len_list.read(meta.falcon_meta.qlen_rand_1, (bit<32>) meta.falcon_meta.random_downstream_id_1);
         queue_len_list.read(meta.falcon_meta.qlen_rand_2, (bit<32>) meta.falcon_meta.random_downstream_id_2);
         if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
@@ -139,8 +143,12 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action act_increment_queue_len() {
         queue_len_list.read(meta.falcon_meta.qlen_curr, (bit<32>)meta.falcon_meta.selected_downstream_id);
-        meta.falcon_meta.qlen_curr = meta.falcon_meta.qlen_curr + 1;
-        queue_len_list.write((bit<32>)meta.falcon_meta.selected_downstream_id, meta.falcon_meta.qlen_curr);        
+        meta.falcon_meta.qlen_curr = meta.falcon_meta.qlen_curr + meta.falcon_meta.queue_len_unit;
+        queue_len_list.write((bit<32>)meta.falcon_meta.selected_downstream_id, meta.falcon_meta.qlen_curr);  
+
+        aggregate_queue_len_list.read(meta.falcon_meta.qlen_agg, (bit<32>) hdr.falcon.local_cluster_id);
+        meta.falcon_meta.qlen_agg = meta.falcon_meta.qlen_agg + meta.falcon_meta.queue_len_unit;
+        aggregate_queue_len_list.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.qlen_agg);       
     }
 
     action act_check_last_probe() {
@@ -323,10 +331,12 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     apply {
         if (hdr.falcon.isValid()) {
+            // TODO: Optimization: these tables do not apply for packets upstream links 
+            
             read_idle_count.apply();
             read_linked_sq.apply();
+            set_queue_len_unit.apply();
             if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE || hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE) {
-                set_queue_len_unit.apply();
                 decrement_queue_len.apply();
                 if (meta.falcon_meta.linked_sq_id != 0xFF) { // not Null. TODO: fix Null value 0xFF port is valid
                     hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
@@ -334,6 +344,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     // TODO: Fix forwarding (use layer 2 routing)
                     standard_metadata.egress_spec = (bit<9>)meta.falcon_meta.linked_sq_id;
                 }
+
                 if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE) {
                     if (meta.falcon_meta.cluster_idle_count < MAX_IDLE_WORKERS_PER_CLUSTER) {
                         add_to_idle_list.apply();
@@ -362,7 +373,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     gen_random_downstream_id_2.apply();
                     cmp_random_qlen.apply();
                 }
-                increment_queue_len.apply();
+                increment_queue_len.apply(); // TODO: Optimize this, needs to read the current queue lenght again (once read by previous actions)
                 forward_falcon.apply();
             } else if (hdr.falcon.pkt_type == PKT_TYPE_PROBE_IDLE_RESPONSE) {
                 if (meta.falcon_meta.cluster_idle_count > 0) { // Still idle workers available
