@@ -34,7 +34,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     register<bit<16>>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_iq_sched; // Spine that ToR has sent last IdleSignal.
     register<bit<16>>((bit<32>) NUM_VCLUSTERS_PER_RACK) linked_sq_sched; // Spine that ToR has sent last QueueSignal.
     
-    // List of idle workers up to 8 (idle workers) * 128 (clusters) 
+    // List of idle workers up to 16 (idle workers) * 64 (clusters) 
     // Value 0x00 means Non-valid (NULL)
     register<worker_id_t>((bit<32>) 1024) idle_list; 
     register<bit<HDR_SRC_ID_SIZE>>((bit<32>) NUM_VCLUSTERS_PER_RACK) idle_count; // Idle count for each cluster, acts as pointer going frwrd and backwrd to point to idle worker list
@@ -106,8 +106,8 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     }
 
     action act_pop_from_idle_list () {
-        idle_list.read(meta.falcon_meta.idle_downstream_id, (bit<32>) meta.falcon_meta.idle_worker_index);
         meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index - 1;
+        idle_list.read(hdr.falcon.dst_id, (bit<32>) meta.falcon_meta.idle_worker_index);
         idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
         //add_to_field(meta.falcon_meta.idle_worker_index, -1);
     }
@@ -135,16 +135,16 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         queue_len_list.read(meta.falcon_meta.qlen_rand_1, (bit<32>) meta.falcon_meta.random_downstream_id_1);
         queue_len_list.read(meta.falcon_meta.qlen_rand_2, (bit<32>) meta.falcon_meta.random_downstream_id_2);
         if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
-            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_2;
+            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_2;
         } else {
-            meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_1;
+            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_1;
         }
     }
 
     action act_increment_queue_len() {
-        queue_len_list.read(meta.falcon_meta.qlen_curr, (bit<32>)meta.falcon_meta.selected_downstream_id);
+        queue_len_list.read(meta.falcon_meta.qlen_curr, (bit<32>)hdr.falcon.dst_id);
         meta.falcon_meta.qlen_curr = meta.falcon_meta.qlen_curr + meta.falcon_meta.queue_len_unit;
-        queue_len_list.write((bit<32>)meta.falcon_meta.selected_downstream_id, meta.falcon_meta.qlen_curr);  
+        queue_len_list.write((bit<32>)hdr.falcon.dst_id, meta.falcon_meta.qlen_curr);  
 
         aggregate_queue_len_list.read(meta.falcon_meta.qlen_agg, (bit<32>) hdr.falcon.local_cluster_id);
         meta.falcon_meta.qlen_agg = meta.falcon_meta.qlen_agg + meta.falcon_meta.queue_len_unit;
@@ -253,7 +253,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     // Mapping from worker IDs for each vcluster to physical port passed by control plane tables. 
     table forward_falcon {
         key = {
-            meta.falcon_meta.selected_downstream_id: exact;
+            hdr.falcon.dst_id: exact;
             hdr.falcon.cluster_id: exact;
         }
         actions = {

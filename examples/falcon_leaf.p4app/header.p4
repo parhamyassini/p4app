@@ -31,7 +31,7 @@
 #define QUEUE_LEN_FIXED_POINT_SIZE 8
 
 // These are local per-rack values as ToR does not care about other racks
-#define MAX_IDLE_WORKERS_PER_CLUSTER 8 
+#define MAX_IDLE_WORKERS_PER_CLUSTER 16 
 #define MAX_WORKERS_PER_CLUSTER 16
 
 // @parham: Check this approach, using combinations of 2 out of #spine schedulers (16) to PROBE_IDLE_QUEUE
@@ -85,7 +85,8 @@ header faclon_t {
     bit<HDR_PKT_TYPE_SIZE> pkt_type;
     bit<HDR_CLUSTER_ID_SIZE> cluster_id;
     bit<HDR_LOCAL_CLUSTER_ID_SIZE> local_cluster_id;
-    bit<16> src_id; // workerID for Tors. ToRID for spines.
+    bit<16> src_id; // workerID for ToRs. ToRID for spines.
+    bit<16> dst_id;
     bit<8> qlen; // Also used for reporting length of idle list (from spine sw to leaf sw)
     bit<HDR_SEQ_NUM_SIZE> seq_num;   
 }

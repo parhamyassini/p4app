@@ -24,6 +24,8 @@ from falconpkts.pkts import *
 
 import sys
 
+num_tasks = 1
+
 class SrcRoute(Packet):
     name = "SrcRoute"
     fields_desc = [
@@ -56,11 +58,13 @@ def main():
 
     _dst_ip = '10.0.2.101'
 
-    new_task_packet = make_falcon_task_pkt(dst_ip=_dst_ip, cluster_id=5, local_cluster_id=1, src_id=6, **eth_kwargs)
-    print('>> New Task packet (size = %d bytes):' % len(new_task_packet))
-    new_task_packet.show()
+    for i in range(num_tasks):
+        new_task_packet = make_falcon_task_pkt(dst_ip=_dst_ip, cluster_id=5, local_cluster_id=1, src_id=6, **eth_kwargs)
 
-    send(new_task_packet)
+        print('>> New Task packet (size = %d bytes):' % len(new_task_packet))
+        #new_task_packet.show()
+
+        send(new_task_packet)
 
 
 if __name__ == '__main__':

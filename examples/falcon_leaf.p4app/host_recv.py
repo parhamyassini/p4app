@@ -33,7 +33,7 @@ class Worker:
         print (ip_address)
 
     def receive_pkt(self):
-        sniff(filter="udp", prn = lambda x: self.handle_pkt(x))
+        sniff(filter=("ip src not %s and udp" % self.ip_address), prn = lambda x: self.handle_pkt(x))
 
     def handle_pkt(self, pkt):
         eth_kwargs = {
@@ -43,6 +43,7 @@ class Worker:
         if not pkt[UDP]:
             print("Packet not UDP")
             return
+
         if (pkt[UDP].dport==1234):
             rcv_hdr = FalconPacket(pkt[UDP].payload)
 
@@ -53,8 +54,8 @@ class Worker:
             
             #print('>> Task Done packet (size = %d bytes):' % len(task_done_pkt))
             
-            task_done_pkt.show()
-            
+            #task_done_pkt.show()
+
             send(task_done_pkt)
 
 if __name__ == '__main__':
