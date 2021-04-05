@@ -11,7 +11,10 @@ table_add set_queue_len_unit act_set_queue_len_unit 1 => 0x04
 
 register_write switch_type 0 1
 
-mirroring_add 500 2
+mirroring_add 1 1
+mirroring_add 2 2
+mirroring_add 3 3
+mirroring_add 4 4
 
 register_write queue_len_list 16 7
 register_write queue_len_list 17 4
@@ -31,5 +34,11 @@ register_write spine_iq_len_1 5 255
 register_write spine_iq_len_1 6 255
 register_write spine_iq_len_1 7 255
 
+table_add set_src_id act_set_src_id => 1
+
 table_add forward set_dmac 255.255.255.255 => ff:ff:ff:ff:ff:ff
 table_add ipv4_lpm broadcast 255.255.255.255/32 =>
+
+mc_mgrp_create 2
+mc_node_create 1 1
+mc_node_associate 2 1

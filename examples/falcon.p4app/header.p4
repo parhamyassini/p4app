@@ -103,7 +103,8 @@ struct falcon_metadata_t {
     bit<HDR_SRC_ID_SIZE> random_downstream_id_1;
     bit<HDR_SRC_ID_SIZE> random_downstream_id_2;
     bit<HDR_SRC_ID_SIZE> selected_downstream_id;
-    bit<HDR_SRC_ID_SIZE> cluster_num_valid_ds; // Holds number of actual downstream elements (workers/tor scheds) in current cluster
+    bit<HDR_SRC_ID_SIZE> cluster_num_valid_ds; // Holds number of downstream components (workers/tor scheds) in current cluster
+    bit<HDR_SRC_ID_SIZE> cluster_num_avail_queue;
     bit<HDR_SRC_ID_SIZE> idle_downstream_id;
     bit<8> qlen_curr;
     bit<8> last_idle_list_len;
@@ -121,6 +122,7 @@ struct falcon_metadata_t {
     bit<16> idle_worker_index;
     bit<16> worker_index;
     bit<16> cluster_worker_start_idx;
+
 }
 
 struct ingress_metadata_t {

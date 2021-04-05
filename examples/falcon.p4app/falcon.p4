@@ -14,11 +14,11 @@
 #define PKT_INSTANCE_TYPE_REPLICATION 5
 #define PKT_INSTANCE_TYPE_RESUBMIT 6
 
+// Use this ID when populating tables for broadcast to all (downstream) ports
+#define MCAST_ID_BROADCAST 255
+
 // Note: Set this according to switch layer. Larger values for spine as switch is in path of more vclusters.
 #define MAX_VCLUSTERS 8
-
-// Used by spine schedulers, currently hardcoded (can be set from ctrl plane)
-#define SWITCH_ID 1
 
 #define LEAF_SPINE_RATIO 10
 
@@ -29,13 +29,13 @@ typedef bit<16> worker_id_t;
 typedef bit<QUEUE_LEN_FIXED_POINT_SIZE> len_fixed_point_t;
 
 control egress(inout headers hdr, inout metadata meta, inout standard_metadata_t standard_metadata) {
-    action act_set_src_id(){
-        hdr.falcon.src_id = SWITCH_ID;
+    action act_set_src_id(bit <16> self_id){
+        hdr.falcon.src_id = self_id;
     }
 
     table set_src_id {
         actions = {act_set_src_id;}
-        default_action = act_set_src_id;
+        default_action = act_set_src_id(0);
     }
 
     apply {  
@@ -45,21 +45,25 @@ control egress(inout headers hdr, inout metadata meta, inout standard_metadata_t
 
 control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_t standard_metadata) {
     register<bit<1>>((bit<32>) 1) switch_type; // To select switch behaviour (spine/leaf) from ctrl plane
-
-    register<bit<16>>((bit<32>) MAX_VCLUSTERS) linked_iq_sched; // Spine that ToR has sent last IdleSignal.
-    register<bit<16>>((bit<32>) MAX_VCLUSTERS) linked_sq_sched; // Spine that ToR has sent last QueueSignal.
     
     // List of idle workers up to 16 (idle workers) * 64 (clusters) 
     // Value 0x00 means Not-valid (NULL)
     register<worker_id_t>((bit<32>) 1024) idle_list; 
     register<bit<HDR_SRC_ID_SIZE>>((bit<32>) MAX_VCLUSTERS) idle_count; // Idle count for each cluster, acts as pointer going frwrd and backwrd to point to idle worker list
 
+    // Spine only registers:
+    // Holds length of the queue lengths vector 
     register<bit<HDR_SRC_ID_SIZE>>((bit<32>) MAX_VCLUSTERS) queue_len_count;
+    // To map between queue_lens avaialable and id of the switch
+    register<bit<HDR_SRC_ID_SIZE>>((bit<32>) 1024) queue_len_switch_id;
 
     register<queue_len_t>((bit <32>) 1024) queue_len_list; // List of queue lens 8 (workers) * 128 (clusters)
     register<queue_len_t>((bit <32>) MAX_VCLUSTERS) aggregate_queue_len_list;
 
+    // Leaf switch registers
     // These registers are used for stateful probing, ToR sends first probes fills these
+    register<bit<16>>((bit<32>) MAX_VCLUSTERS) linked_iq_sched; // Spine that ToR has sent last IdleSignal.
+    register<bit<16>>((bit<32>) MAX_VCLUSTERS) linked_sq_sched; // Spine that ToR has sent last QueueSignal.
     register<queue_len_t>((bit<32>) MAX_VCLUSTERS) spine_iq_len_1;
     register<worker_id_t>((bit<32>) MAX_VCLUSTERS) spine_probed_id;
     //register<worker_id_t>((bit<32>) MAX_VCLUSTERS) spine_sw_id_2;
@@ -68,9 +72,10 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     //register<bit<16>>((bit <32>) 1024) spines_per_cluster;
 
     action clone_packet() {
-        const bit<32> REPORT_MIRROR_SESSION_ID = 500;
         // Clone from ingress to egress pipeline
-        clone(CloneType.I2E, REPORT_MIRROR_SESSION_ID);
+        // secnod param (mirror session ID) maps to a specific output port
+        clone(CloneType.I2E, (bit<32>)standard_metadata.egress_spec);
+
     }
 
     action _drop() {
@@ -81,7 +86,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         switch_type.read(meta.falcon_meta.switch_type, (bit<32>) 0);
     }
     
-    action act_gen_rand_probe_group() {
+    action act_gen_random_probe_group() {
         /* 
         TODO: Use modify_field_rng_uniform instead of random<> for hardware targets
         This is not implemented in bmv but available in Hardware. 
@@ -100,22 +105,50 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action act_gen_random_worker_id_1() {
         //modify_field_rng_uniform(meta.falcon_meta.random_downstream_id_1, 0, meta.falcon_meta.cluster_num_valid_ds);
+        // Note: ranges for random in bmv2 are inclusive (reason to decreament upper bound) 
         random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_1, 0, meta.falcon_meta.cluster_num_valid_ds - 1);
         meta.falcon_meta.random_downstream_id_1 = meta.falcon_meta.random_downstream_id_1 + meta.falcon_meta.cluster_worker_start_idx;
     }
 
     action act_gen_random_worker_id_2() {
         //modify_field_rng_uniform(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds);
+        // Note: ranges for random in bmv2 are inclusive (reason to decreament upper bound)
         random<bit<HDR_SRC_ID_SIZE>>(meta.falcon_meta.random_downstream_id_2, 0, meta.falcon_meta.cluster_num_valid_ds - 1);
         meta.falcon_meta.random_downstream_id_2 = meta.falcon_meta.random_downstream_id_2 + meta.falcon_meta.cluster_worker_start_idx;
+    }
+
+    action act_spine_gen_random_downstream_id_1() {
+        bit<HDR_SRC_ID_SIZE> random_index;
+        random<bit<HDR_SRC_ID_SIZE>>(random_index, 0, meta.falcon_meta.cluster_num_avail_queue - 1);
+        // Map index to switch ID 
+        queue_len_switch_id.read(meta.falcon_meta.random_downstream_id_1, (bit<32>) (random_index + meta.falcon_meta.cluster_worker_start_idx));
+    }
+
+    action act_spine_gen_random_downstream_id_2() {
+        bit<HDR_SRC_ID_SIZE> random_index;
+        random<bit<HDR_SRC_ID_SIZE>>(random_index, 0, meta.falcon_meta.cluster_num_avail_queue - 1);
+        // Map index to switch ID 
+        queue_len_switch_id.read(meta.falcon_meta.random_downstream_id_2, (bit<32>) (random_index + meta.falcon_meta.cluster_worker_start_idx));
     }
 
     action act_get_cluster_num_valid_ds(bit<16> num_ds_elements) {
         meta.falcon_meta.cluster_num_valid_ds = num_ds_elements;
     }
 
-    action act_spine_get_cluster_num_valid_ds() {  // Get number of queue len signal available at spine
-        queue_len_count.read(meta.falcon_meta.cluster_num_valid_ds, (bit<32>) hdr.falcon.cluster_id);
+    // Get number of queue len signal available at spine
+    action act_spine_get_cluster_num_avail_queues() {  
+        queue_len_count.read(meta.falcon_meta.cluster_num_avail_queue, (bit<32>) hdr.falcon.cluster_id);
+    }
+
+    action act_spine_add_queue_len () {
+        // Read, increement write back the register (stateful ALU operation in Tofino ?)
+        queue_len_count.read(meta.falcon_meta.cluster_num_avail_queue, (bit<32>) hdr.falcon.cluster_id);
+        queue_len_count.write((bit<32>) hdr.falcon.cluster_id, meta.falcon_meta.cluster_num_avail_queue + 1);
+        // Calculate index to write new queue len
+        // meta.falcon_meta.cluster_worker_start_idx = (bit <16>) (hdr.falcon.local_cluster_id * MAX_WORKERS_PER_CLUSTER);
+        // Write new queue len info
+        queue_len_list.write((bit<32>)(meta.falcon_meta.cluster_worker_start_idx + meta.falcon_meta.cluster_num_avail_queue), hdr.falcon.qlen);
+        queue_len_switch_id.write((bit <32>) (meta.falcon_meta.cluster_worker_start_idx + meta.falcon_meta.cluster_num_avail_queue), hdr.falcon.src_id);
     }
 
     action act_read_idle_count() {
@@ -153,6 +186,15 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         //add_to_field(meta.falcon_meta.idle_worker_index, -1);
     }
 
+    action act_spine_pick_top_idle_list () {
+        idle_list.read(hdr.falcon.dst_id, (bit<32>) meta.falcon_meta.idle_worker_index);
+    }
+
+    action act_spine_pop_from_idle_list () {
+        meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index - 1;
+        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
+    }
+
     action act_decrement_queue_len() {
         // Update queue len
         meta.falcon_meta.worker_index = (bit<16>) hdr.falcon.src_id + meta.falcon_meta.cluster_worker_start_idx;
@@ -169,17 +211,12 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         standard_metadata.egress_spec = port;
     }
 
-    action act_cmp_random_qlen() {
+    action act_get_random_qlen() {
         // if (meta.falcon_meta.random_downstream_id_1 == meta.falcon_meta.random_downstream_id_2){
         //     meta.falcon_meta.selected_downstream_id = meta.falcon_meta.random_downstream_id_1;
         // }
         queue_len_list.read(meta.falcon_meta.qlen_rand_1, (bit<32>) meta.falcon_meta.random_downstream_id_1);
         queue_len_list.read(meta.falcon_meta.qlen_rand_2, (bit<32>) meta.falcon_meta.random_downstream_id_2);
-        if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
-            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_2;
-        } else {
-            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_1;
-        }
     }
 
     action act_increment_queue_len() {
@@ -216,9 +253,13 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     }
 
     action broadcast() {
-        standard_metadata.mcast_grp = 1;
+        standard_metadata.mcast_grp = MCAST_ID_BROADCAST;
         meta.ingress_metadata.nhop_ipv4 = hdr.ipv4.dstAddr;
         hdr.ipv4.ttl = hdr.ipv4.ttl + 8w255;
+    }
+
+    action act_spine_select_random_leaf() {
+        random<bit<HDR_SRC_ID_SIZE>>(hdr.falcon.dst_id, 0, meta.falcon_meta.cluster_num_valid_ds - 1);
     }
 
     table get_switch_type {
@@ -239,8 +280,8 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     }
 
     table gen_random_probe_group {
-        actions = {act_gen_rand_probe_group;}
-        default_action = act_gen_rand_probe_group;
+        actions = {act_gen_random_probe_group;}
+        default_action = act_gen_random_probe_group;
     }
 
     table gen_random_downstream_id_1 {
@@ -251,6 +292,16 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     table gen_random_downstream_id_2 {
         actions = {act_gen_random_worker_id_2;}
         default_action = act_gen_random_worker_id_2;
+    }
+
+    table spine_gen_random_downstream_id_1 {
+        actions = {act_spine_gen_random_downstream_id_1;}
+        default_action = act_spine_gen_random_downstream_id_1;
+    }
+
+    table spine_gen_random_downstream_id_2 {
+        actions = {act_spine_gen_random_downstream_id_2;}
+        default_action = act_spine_gen_random_downstream_id_2;
     }
 
     // Gets the actual number of downstream elements (workers or tor schedulers) for vcluster (passed by ctrl plane)
@@ -267,8 +318,25 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     }
 
     table spine_get_cluster_num_valid_ds {
-        actions = {act_spine_get_cluster_num_valid_ds;}
-        default_action = act_spine_get_cluster_num_valid_ds;
+        key = {
+            hdr.falcon.cluster_id : exact;
+        }
+        actions = {
+            act_get_cluster_num_valid_ds;
+            NoAction;
+        }
+        size = HDR_CLUSTER_ID_SIZE;
+        default_action = NoAction;
+    }
+
+    table spine_get_cluster_num_avail_queues {
+        actions = {act_spine_get_cluster_num_avail_queues;}
+        default_action = act_spine_get_cluster_num_avail_queues;
+    }
+
+    table spine_add_queue_len {
+        actions = {act_spine_add_queue_len;}
+        default_action = act_spine_add_queue_len;
     }
 
     table read_idle_count {
@@ -286,14 +354,24 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = act_add_to_idle_list;
     }
 
+    table spine_add_to_idle_list {
+        actions = {act_add_to_idle_list;}
+        default_action = act_add_to_idle_list;
+    }
+
     table pop_from_idle_list {
         actions = {act_pop_from_idle_list;}
         default_action = act_pop_from_idle_list;
     }
 
+    table spine_pick_top_idle_list {
+        actions = {act_spine_pick_top_idle_list;}
+        default_action = act_spine_pick_top_idle_list;
+    }
+
     table spine_pop_from_idle_list {
-        actions = {act_pop_from_idle_list;}
-        default_action = act_pop_from_idle_list;
+        actions = {act_spine_pop_from_idle_list;}
+        default_action = act_spine_pop_from_idle_list;
     }
 
     // table get_worker_index {
@@ -306,13 +384,31 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = act_decrement_queue_len;
     }
 
-    table cmp_random_qlen {
-        actions = {act_cmp_random_qlen;}
-        default_action = act_cmp_random_qlen;
+    table get_random_qlen {
+        actions = {act_get_random_qlen;}
+        default_action = act_get_random_qlen;
+    }
+
+    table spine_get_random_qlen {
+        actions = {act_get_random_qlen;}
+        default_action = act_get_random_qlen;
     }
     // Currently uses the ID of workers to forward downstream.
     // Mapping from worker IDs for each vcluster to physical port passed by control plane tables. 
     table forward_falcon {
+        key = {
+            hdr.falcon.dst_id: exact;
+            hdr.falcon.cluster_id: exact;
+        }
+        actions = {
+            act_forward_falcon;
+            NoAction;
+        }
+        size = HDR_SRC_ID_SIZE;
+        default_action = NoAction;
+    }
+
+    table spine_forward_falcon {
         key = {
             hdr.falcon.dst_id: exact;
             hdr.falcon.cluster_id: exact;
@@ -355,6 +451,17 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = act_update_linked_sq;
     }
 
+    table spine_select_random_leaf {
+        actions = {act_spine_select_random_leaf;}
+        default_action = act_spine_select_random_leaf;
+    }
+
+    table spine_gen_random_probe_group {
+        actions = {act_gen_random_probe_group;}
+        default_action = act_gen_random_probe_group;
+    }
+
+    // ********* Normal switch forwarding BEGIN ********
     action set_nhop(bit<32> nhop_ipv4, bit<9> port) {
         meta.ingress_metadata.nhop_ipv4 = nhop_ipv4;
         standard_metadata.egress_spec = port;
@@ -390,6 +497,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         size = 512;
         default_action = NoAction();
     }
+    // ********* END Normal switch forwarding ********
 
 
     apply {
@@ -431,20 +539,29 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     */
                     if (meta.falcon_meta.cluster_idle_count > 0) { //Idle workers available
                         pop_from_idle_list.apply();
-                        if (meta.falcon_meta.cluster_idle_count == 1) { // No more idle after this assignment
-                            linked_iq_sched.write(0, 0); // Set to NULL
-                        }
                     } else {
                         get_cluster_num_valid_ds.apply();
                         gen_random_downstream_id_1.apply();
                         gen_random_downstream_id_2.apply();
-                        cmp_random_qlen.apply();
+                        get_random_qlen.apply();
+                        if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
+                            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_2;
+                        } else {
+                            hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_1;
+                        }
                     }
 
                     // TODO: Optimize this, needs to read the current queue lenght again (once read by previous actions)
                     // TODO: How to increment queue_len at spine? Should know about vcluster unit for all racks?
                     increment_queue_len.apply(); 
                     forward_falcon.apply();
+                    clone_packet(); // Clone task packet and send to egress port
+                    if (meta.falcon_meta.cluster_idle_count == 0) { // Rack not idle after this assignment
+                        linked_iq_sched.write(0, 0); // Set to NULL
+                        // Reply to the spine with Idle remove
+                        hdr.falcon.pkt_type = PKT_TYPE_IDLE_REMOVE;
+                        standard_metadata.egress_spec = standard_metadata.ingress_port;
+                    }
                 } else if (hdr.falcon.pkt_type == PKT_TYPE_PROBE_IDLE_RESPONSE) {
                     if (meta.falcon_meta.cluster_idle_count > 0) { // Still idle workers available
                         check_last_probe.apply();
@@ -476,19 +593,51 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     }
             } else { // Spine switch
                 spine_read_idle_count.apply();
-
                 if(hdr.falcon.pkt_type == PKT_TYPE_NEW_TASK) {
                     if (meta.falcon_meta.cluster_idle_count > 0) { //Idle workers available
-                        spine_pop_from_idle_list.apply();
+                        spine_pick_top_idle_list.apply();
                     } else {
                         spine_get_cluster_num_valid_ds.apply();
-                        if (meta.falcon_meta.cluster_num_valid_ds < 2) { // Not enough info at spine
+                        spine_get_cluster_num_avail_queues.apply();
+                        if (meta.falcon_meta.cluster_num_avail_queue < 2) { // Not enough info at spine
+                            spine_select_random_leaf.apply(); // Get ID of a random leaf from all available leafs
+                            spine_forward_falcon.apply(); // Map ID to egress port
+                            clone_packet(); // Clone that packet on egress port
+                            spine_gen_random_probe_group.apply();
                             hdr.falcon.pkt_type = PKT_TYPE_SCAN_QUEUE_SIGNAL; // Multicast Scan packet to k connected ToRs
                             standard_metadata.mcast_grp = (bit <16>) meta.falcon_meta.rand_probe_group;
+                        } else {
+                            spine_gen_random_downstream_id_1.apply();
+                            spine_gen_random_downstream_id_2.apply();
+                            spine_get_random_qlen.apply();
+                            if (meta.falcon_meta.qlen_rand_1 >= meta.falcon_meta.qlen_rand_2) {
+                                hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_2;
+                            } else {
+                                hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_1;
+                            }
                         }
-                        clone_packet();
                     }
-            }
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_IDLE_SIGNAL) {
+                    if (meta.falcon_meta.cluster_idle_count < MAX_IDLE_WORKERS_PER_CLUSTER) {
+                        spine_add_to_idle_list.apply();
+                        queue_len_count.write((bit<32>) hdr.falcon.cluster_id, 0); // Reset length mappings
+                        hdr.falcon.pkt_type = PKT_TYPE_QUEUE_REMOVE; // packet to unpair the leaf switches
+                        broadcast(); // Send to all downstream links. 
+                        // TODO: Instead of broadcast we need to send this to the ones currently in queue list
+                        // without broadcast, spine needs to maintain state about the ToRs in queue list (e.g their IDs or IP etc.)
+                    }
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_QUEUE_SIGNAL) {
+                    spine_add_queue_len.apply();
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_PROBE_IDLE_QUEUE) {
+                    hdr.falcon.pkt_type = PKT_TYPE_PROBE_IDLE_RESPONSE;
+                    hdr.falcon.qlen = (bit <8>) meta.falcon_meta.cluster_idle_count; // TODO: 8bit sufficient for cluster_idle_count 
+                    hdr.falcon.dst_id = hdr.falcon.src_id;
+                } else if (hdr.falcon.pkt_type == PKT_TYPE_IDLE_REMOVE) {
+                    // TODO: For now, leaf will only send back IDLE_REMOVE to the spine as reply.
+                    // Sometimes, We need to remove the switch with <src_id> from the idle list of the linked_iq as a result of random tasks.
+                    //  but don't have access to its index at spine. 
+                    spine_pop_from_idle_list.apply();
+                }
         } 
     } else if (hdr.ipv4.isValid()) {
         // Apply regular switch procedure
