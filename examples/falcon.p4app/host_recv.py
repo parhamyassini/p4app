@@ -50,13 +50,13 @@ class Worker:
             rcv_hdr.show()
             print ("received packet")
             
-            task_done_pkt = make_falcon_task_done_pkt(dst_ip=pkt[IP].src, cluster_id=rcv_hdr.cluster_id, local_cluster_id=rcv_hdr.local_cluster_id, src_id=int(self.rack_local_id), **eth_kwargs)
+            #task_done_pkt = make_falcon_task_done_pkt(dst_ip=pkt[IP].src, cluster_id=rcv_hdr.cluster_id, local_cluster_id=rcv_hdr.local_cluster_id, src_id=int(self.rack_local_id), **eth_kwargs)
             
             #print('>> Task Done packet (size = %d bytes):' % len(task_done_pkt))
             
             #task_done_pkt.show()
 
-            send(task_done_pkt)
+            #send(task_done_pkt)
 
 if __name__ == '__main__':
     host_ip = sys.argv[1]

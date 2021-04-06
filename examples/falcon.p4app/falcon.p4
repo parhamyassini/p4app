@@ -182,7 +182,9 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     action act_pop_from_idle_list () {
         meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index - 1;
         idle_list.read(hdr.falcon.dst_id, (bit<32>) meta.falcon_meta.idle_worker_index);
-        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
+        bit <16> cluster_idle_count;
+        idle_count.read(cluster_idle_count, (bit<32>) hdr.falcon.local_cluster_id);
+        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, cluster_idle_count - 1);
         //add_to_field(meta.falcon_meta.idle_worker_index, -1);
     }
 
@@ -192,7 +194,8 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
 
     action act_spine_pop_from_idle_list () {
         meta.falcon_meta.idle_worker_index = meta.falcon_meta.idle_worker_index - 1;
-        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.idle_worker_index);
+
+        idle_count.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.cluster_idle_count - 1);
     }
 
     action act_decrement_queue_len() {
@@ -572,8 +575,9 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     // TODO: How to increment queue_len at spine? Should know about vcluster unit for all racks?
                     increment_queue_len.apply(); 
                     forward_falcon.apply();
-                    clone_packet(); // Clone task packet and send to egress port
+                    
                     if (meta.falcon_meta.cluster_idle_count == 0) { // Rack not idle after this assignment
+                        clone_packet(); // Clone task packet and send to egress port
                         linked_iq_sched.write(0, 0); // Set to NULL
                         // Reply to the spine with Idle remove
                         hdr.falcon.pkt_type = PKT_TYPE_IDLE_REMOVE;

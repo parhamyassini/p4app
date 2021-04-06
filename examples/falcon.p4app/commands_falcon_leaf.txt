@@ -19,6 +19,9 @@ register_write idle_count 1 2
 register_write idle_list 16 18
 register_write idle_list 17 19
 
+register_write linked_sq_sched 0 255
+register_write linked_iq_sched 0 1
+
 register_write spine_iq_len_1 0 255
 register_write spine_iq_len_1 1 255
 register_write spine_iq_len_1 2 255
@@ -27,6 +30,11 @@ register_write spine_iq_len_1 4 255
 register_write spine_iq_len_1 5 255
 register_write spine_iq_len_1 6 255
 register_write spine_iq_len_1 7 255
+
+mirroring_add 1 1
+mirroring_add 2 2
+mirroring_add 3 3
+mirroring_add 4 4
 
 table_add set_src_id act_set_src_id => 0
 

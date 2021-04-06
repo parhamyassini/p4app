@@ -24,7 +24,7 @@ from falconpkts.pkts import *
 
 import sys
 
-num_tasks = 1
+num_tasks = 5
 
 class SrcRoute(Packet):
     name = "SrcRoute"
