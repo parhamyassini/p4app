@@ -167,7 +167,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         meta.falcon_meta.cluster_worker_start_idx = (bit <16>) (hdr.falcon.cluster_id * MAX_WORKERS_PER_CLUSTER);
         /* TODO: use "add_to_field()" for hardware targets, simply "+" in bvm */
         //meta.falcon_meta.cluster_idle_count = meta.falcon_meta.cluster_idle_count + 1;
-        meta.falcon_meta.idle_worker_index = (bit <16>) meta.falcon_meta.cluster_idle_count + meta.falcon_meta.cluster_worker_start_idx;
+        meta.falcon_meta.idle_worker_index = (bit <16>) meta.falcon_meta.cluster_idle_count + meta.falcon_meta.cluster_worker_start_idx - 1;
     
         //add_to_field(meta.falcon_meta.idle_worker_index, meta.falcon_meta.cluster_idle_count);
         //add_to_field(meta.falcon_meta.idle_worker_index, hdr.falcon.local_cluster_id);
@@ -408,6 +408,23 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = NoAction;
     }
 
+
+    // Used when making a clone packet from ingress to egress
+    // Maps dst_id to port
+    table spine_forward_falcon_early {
+        key = {
+            hdr.falcon.dst_id: exact;
+            hdr.falcon.cluster_id: exact;
+        }
+        actions = {
+            act_forward_falcon;
+            NoAction;
+        }
+        size = HDR_SRC_ID_SIZE;
+        default_action = NoAction;
+    }
+
+    // Maps dst_id to port
     table spine_forward_falcon {
         key = {
             hdr.falcon.dst_id: exact;
@@ -601,7 +618,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                         spine_get_cluster_num_avail_queues.apply();
                         if (meta.falcon_meta.cluster_num_avail_queue < 2) { // Not enough info at spine
                             spine_select_random_leaf.apply(); // Get ID of a random leaf from all available leafs
-                            spine_forward_falcon.apply(); // Map ID to egress port
+                            spine_forward_falcon_early.apply(); // Map ID to egress port
                             clone_packet(); // Clone that packet on egress port
                             spine_gen_random_probe_group.apply();
                             hdr.falcon.pkt_type = PKT_TYPE_SCAN_QUEUE_SIGNAL; // Multicast Scan packet to k connected ToRs
@@ -617,6 +634,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                             }
                         }
                     }
+                    spine_forward_falcon.apply();
                 } else if (hdr.falcon.pkt_type == PKT_TYPE_IDLE_SIGNAL) {
                     if (meta.falcon_meta.cluster_idle_count < MAX_IDLE_WORKERS_PER_CLUSTER) {
                         spine_add_to_idle_list.apply();
