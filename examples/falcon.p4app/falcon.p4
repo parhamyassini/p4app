@@ -20,6 +20,9 @@
 // Note: Set this according to switch layer. Larger values for spine as switch is in path of more vclusters.
 #define MAX_VCLUSTERS 8
 
+// TODO: Check this approach, using combinations of 2 out of #spine schedulers (16) to PROBE_IDLE_QUEUE
+#define RAND_MCAST_RANGE 1
+
 #define LEAF_SPINE_RATIO 10
 
 typedef bit<8> queue_len_t;
@@ -90,9 +93,12 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         /* 
         TODO: Use modify_field_rng_uniform instead of random<> for hardware targets
         This is not implemented in bmv but available in Hardware. 
+        //modify_field_rng_uniform(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);
         */
-        //modify_field_rng_uniform(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);   
-        random<bit<HDR_FALCON_RAND_GROUP_SIZE>>(meta.falcon_meta.rand_probe_group, 0, RAND_MCAST_RANGE);
+        
+
+        // Note: mcast group 0 means "do not multicast" (in bmv2)
+        random<bit<HDR_FALCON_RAND_GROUP_SIZE>>(meta.falcon_meta.rand_probe_group, 1, RAND_MCAST_RANGE);
     }
 
     action act_set_queue_len_unit(len_fixed_point_t cluster_unit){
@@ -233,6 +239,10 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         aggregate_queue_len_list.write((bit<32>) hdr.falcon.local_cluster_id, meta.falcon_meta.qlen_agg);       
     }
 
+    action act_get_aggregate_queue_len() {
+        aggregate_queue_len_list.read(hdr.falcon.qlen, (bit<32>) hdr.falcon.local_cluster_id);
+    }
+
     action act_check_last_probe() {
         spine_iq_len_1.read(meta.falcon_meta.last_idle_list_len, (bit<32>) hdr.falcon.local_cluster_id);
         spine_probed_id.read(meta.falcon_meta.last_idle_probe_id, (bit<32>) hdr.falcon.local_cluster_id);
@@ -252,8 +262,13 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         linked_sq_sched.read(meta.falcon_meta.linked_sq_id, (bit<32>) hdr.falcon.local_cluster_id);
     }
 
+    action act_read_linked_iq() {
+        linked_iq_sched.read(meta.falcon_meta.linked_iq_id, (bit<32>) hdr.falcon.local_cluster_id);
+    }
+
     action act_update_linked_sq() {
         linked_sq_sched.write((bit<32>) hdr.falcon.local_cluster_id, hdr.falcon.src_id);
+        meta.falcon_meta.linked_sq_id = hdr.falcon.src_id;
     }
 
     action broadcast() {
@@ -306,6 +321,11 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     table spine_gen_random_downstream_id_2 {
         actions = {act_spine_gen_random_downstream_id_2;}
         default_action = act_spine_gen_random_downstream_id_2;
+    }
+
+    table get_aggregate_queue_len {
+        actions = {act_get_aggregate_queue_len;}
+        default_action = act_get_aggregate_queue_len;
     }
 
     // Gets the actual number of downstream elements (workers or tor schedulers) for vcluster (passed by ctrl plane)
@@ -397,7 +417,8 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         actions = {act_get_random_qlen;}
         default_action = act_get_random_qlen;
     }
-    // Currently uses the ID of workers to forward downstream.
+
+    // Currently uses the ID of workers to forward.
     // Mapping from worker IDs for each vcluster to physical port passed by control plane tables. 
     table forward_falcon {
         key = {
@@ -412,6 +433,32 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
         default_action = NoAction;
     }
 
+    // Mapping between switch ID and port for each switch
+    // TODO: Spine switch e.g Si could be in path of packets that are not destined for Si 
+    //  Should check dst_id and then use this table to forward to correct destination
+    table forward_falcon_switch_dst {
+        key = {
+            hdr.falcon.dst_id: exact;
+        }
+        actions = {
+            act_forward_falcon;
+            NoAction;
+        }
+        size = HDR_SRC_ID_SIZE;
+        default_action = NoAction;
+    }
+
+    table forward_falcon_switch_dst_2 {
+        key = {
+            hdr.falcon.dst_id: exact;
+        }
+        actions = {
+            act_forward_falcon;
+            NoAction;
+        }
+        size = HDR_SRC_ID_SIZE;
+        default_action = NoAction;
+    }
 
     // Used when making a clone packet from ingress to egress
     // Maps dst_id to port
@@ -465,6 +512,11 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
     table read_linked_sq {
         actions = {act_read_linked_sq;}
         default_action = act_read_linked_sq;
+    }
+
+    table read_linked_iq {
+        actions = {act_read_linked_iq;}
+        default_action = act_read_linked_iq;
     }
 
     table update_linked_sq {
@@ -534,12 +586,6 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
             
                 if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE || hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE) { // Only leaf switch
                     decrement_queue_len.apply();
-                    if (meta.falcon_meta.linked_sq_id != 0xFF) { // not Null. TODO: fix Null value 0xFF port is valid
-                        hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
-                        hdr.falcon.qlen = meta.falcon_meta.qlen_agg; // Reporting agg qlen to Spine
-                        // TODO: Fix forwarding (use layer 2 routing)
-                        standard_metadata.egress_spec = (bit<9>)meta.falcon_meta.linked_sq_id;
-                    }
 
                     if (hdr.falcon.pkt_type == PKT_TYPE_TASK_DONE_IDLE) {
                         if (meta.falcon_meta.cluster_idle_count < MAX_IDLE_WORKERS_PER_CLUSTER) {
@@ -552,7 +598,16 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                             standard_metadata.mcast_grp = (bit <16>) meta.falcon_meta.rand_probe_group;
                             //modify_field(standard_metadata.mcast_grp, meta.falcon_meta.rand_probe_group);
                         }
+                    } 
+
+                    if (meta.falcon_meta.linked_sq_id != 0xFF) { // not Null. TODO: fix Null value 0xFF port is valid
+                        clone_packet(); // Make a new clone for PKT_TYPE_QUEUE_SIGNAL 
+                        hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
+                        hdr.falcon.qlen = meta.falcon_meta.qlen_agg; // Reporting agg qlen to Spine
+                        hdr.falcon.dst_id = meta.falcon_meta.linked_sq_id;
+                        forward_falcon_switch_dst.apply(); // Set egress point based on switch ID
                     }
+                    
                 } else if(hdr.falcon.pkt_type == PKT_TYPE_NEW_TASK) {
                     /*
                      TODO @parham: Remove the ToR from linked_iq spine if the packet is coming based on random decision
@@ -571,15 +626,19 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                             hdr.falcon.dst_id = meta.falcon_meta.random_downstream_id_1;
                         }
                     }
-
                     // TODO: Optimize this, needs to read the current queue lenght again (once read by previous actions)
                     // TODO: How to increment queue_len at spine? Should know about vcluster unit for all racks?
                     increment_queue_len.apply(); 
                     forward_falcon.apply();
-                    
-                    if (meta.falcon_meta.cluster_idle_count == 0) { // Rack not idle after this assignment
-                        clone_packet(); // Clone task packet and send to egress port
-                        linked_iq_sched.write(0, 0); // Set to NULL
+                    read_linked_iq.apply();
+
+                    // Rack not idle anymore after this assignment
+                    // TODO: Currently, leaf will only send PKT_TYPE_IDLE_REMOVE when there was some linked IQ 
+                    //  This means that for task that is coming because of random decision we are not sending Idle remove
+                    //  This limitation is because spine can not iterate over the idle list to remove a switch at the middle it has a stack and can pop only!
+                    if (meta.falcon_meta.cluster_idle_count == 0 && meta.falcon_meta.linked_iq_id != 0xFF) { 
+                        clone_packet(); // Clone task packet and send to egress port (map based on "dst_id" which is set by forward_falcon)
+                        linked_iq_sched.write((bit <32>) hdr.falcon.local_cluster_id, (bit<16>) 0xFF); // Set to NULL
                         // Reply to the spine with Idle remove
                         hdr.falcon.pkt_type = PKT_TYPE_IDLE_REMOVE;
                         standard_metadata.egress_spec = standard_metadata.ingress_port;
@@ -605,10 +664,12 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                     linked_sq_sched.write((bit<32>) hdr.falcon.local_cluster_id, 0xFF);
                 } else if (hdr.falcon.pkt_type == PKT_TYPE_SCAN_QUEUE_SIGNAL) {
                     if (meta.falcon_meta.linked_sq_id == 0xFF) {
+                        get_aggregate_queue_len.apply(); // Reporting agg qlen to Spine
                         update_linked_sq.apply();
                         hdr.falcon.pkt_type = PKT_TYPE_QUEUE_SIGNAL;
-                        hdr.falcon.qlen = meta.falcon_meta.qlen_agg; // Reporting agg qlen to Spine
-                        standard_metadata.egress_spec = (bit<9>) meta.falcon_meta.linked_sq_id;
+                        hdr.falcon.dst_id = meta.falcon_meta.linked_sq_id;
+                        forward_falcon_switch_dst_2.apply(); // Set egress point based on switch ID
+                        //standard_metadata.egress_spec = (bit<9>) meta.falcon_meta.linked_sq_id;
                     }
                 } else {
                     mark_to_drop(standard_metadata);
@@ -624,7 +685,7 @@ control ingress(inout headers hdr, inout metadata meta, inout standard_metadata_
                         if (meta.falcon_meta.cluster_num_avail_queue < 2) { // Not enough info at spine
                             spine_select_random_leaf.apply(); // Get ID of a random leaf from all available leafs
                             spine_forward_falcon_early.apply(); // Map ID to egress port
-                            clone_packet(); // Clone that packet on egress port
+                            clone_packet(); // Clone that packet based on egress port (set by spine_forward_falcon_early)
                             spine_gen_random_probe_group.apply();
                             hdr.falcon.pkt_type = PKT_TYPE_SCAN_QUEUE_SIGNAL; // Multicast Scan packet to k connected ToRs
                             standard_metadata.mcast_grp = (bit <16>) meta.falcon_meta.rand_probe_group;

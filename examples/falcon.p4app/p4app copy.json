@@ -8,7 +8,7 @@
       "pcap_dump": true,
       "cli": false,
       "switches": {
-          "s1": {
+          "s3": {
               "commands": [
                 "commands_falcon_spine.txt"
               ]
@@ -18,13 +18,13 @@
                 "commands_falcon_leaf.txt"
               ]
           },
-          "s3": {
+          "s1": {
               "commands": [
                 "commands_falcon_leaf.txt"
               ]
           }
       },
-      "links": [["h1", "s1"], ["s1", "s2"], ["s1", "s3"], ["s2", "h2"], ["s2", "h3"], ["s3", "h4"], ["s3", "h5"]],
+      "links": [["h1", "s3"], ["s3", "s2"], ["s3", "s1"], ["s2", "h2"], ["s2", "h3"], ["s1", "h4"], ["s1", "h5"]],
       "hosts": {
         "h1": {
             "cmd": "python3 host_send.py",

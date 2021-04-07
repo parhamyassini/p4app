@@ -8,8 +8,7 @@ table_add forward_falcon act_forward_falcon 17 5 => 0x02
 table_add forward_falcon act_forward_falcon 18 5 => 0x01
 table_add forward_falcon act_forward_falcon 19 5 => 0x02
 
-table_add forward_falcon_switch_dst act_forward_falcon 1 => 0x03
-table_add forward_falcon_switch_dst_2 act_forward_falcon 1 => 0x03
+table_add forward_falcon forward_falcon_switch_dst 1 => 0x03
 
 register_write switch_type 0 0
 
@@ -22,10 +21,8 @@ register_write idle_count 1 2
 register_write idle_list 16 18
 register_write idle_list 17 19
 
-register_write linked_sq_sched 1 255
-register_write linked_sq_sched 5 255
-
-register_write linked_iq_sched 1 1
+register_write linked_sq_sched 0 255
+register_write linked_iq_sched 0 1
 
 register_write spine_iq_len_1 0 255
 register_write spine_iq_len_1 1 255

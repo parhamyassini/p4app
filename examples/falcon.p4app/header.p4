@@ -34,10 +34,6 @@
 #define MAX_IDLE_WORKERS_PER_CLUSTER 16 
 #define MAX_WORKERS_PER_CLUSTER 16
 
-// @parham: Check this approach, using combinations of 2 out of #spine schedulers (16) to PROBE_IDLE_QUEUE
-#define RAND_MCAST_RANGE 120 
-
-
 header ethernet_t {
     bit<48> dstAddr;
     bit<48> srcAddr;
@@ -111,6 +107,7 @@ struct falcon_metadata_t {
     bit<HDR_SRC_ID_SIZE> last_idle_probe_id;
     bit<HDR_SRC_ID_SIZE> shortest_idle_queue_id;
     bit<HDR_SRC_ID_SIZE> linked_sq_id;
+    bit<HDR_SRC_ID_SIZE> linked_iq_id;
     bit<8> qlen_agg;
     bit<8> qlen_rand_1;
     bit<8> qlen_rand_2;
